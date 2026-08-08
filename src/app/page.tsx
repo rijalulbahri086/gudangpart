@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import RequestModal from '@/app/components/RequestModal';
+import AddPartModal from '@/app/components/AddPartModal';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
@@ -17,6 +18,8 @@ import {
   LogOut,
   LogIn,
   User,
+  Lock,
+  PackagePlus,
   Image as ImageIcon 
 } from 'lucide-react';
 
@@ -52,21 +55,31 @@ export default function Dashboard() {
   const [requestType, setRequestType] = useState<'MASUK' | 'KELUAR'>('MASUK');
   const [selectedItem, setSelectedItem] = useState<SparePart | null>(null);
 
-  // Cek Session User jika ada (Tanpa Auto Redirect)
+  // State Modal Tambah Barang Baru
+  const [addModalOpen, setAddModalOpen] = useState<boolean>(false);
+
+  // Cek Session User
   const checkSession = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user) {
-      const { data: userData } = await supabase
+      const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('name, role')
+        .select('full_name, role')
         .eq('id', session.user.id)
-        .single();
+        .maybeSingle();
+
+      if (userError) {
+        console.error('Error fetching user profile:', userError.message);
+      }
+
+      const displayName = userData?.full_name || session.user.email;
+      const userRole = userData?.role || 'TEKNISI';
 
       setCurrentUser({
         id: session.user.id,
         email: session.user.email,
-        name: userData?.name || session.user.email,
-        role: userData?.role || 'TEKNISI'
+        name: displayName,
+        role: userRole
       });
     } else {
       setCurrentUser(null);
@@ -117,6 +130,8 @@ export default function Dashboard() {
     return matchName || matchPartNo || matchSku || matchArea || matchRack || matchAlias;
   });
 
+  const isAuthorizedUser = currentUser?.role === 'TEKNISI' || currentUser?.role === 'ADMIN';
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
       {/* HEADER UTAMA */}
@@ -151,19 +166,28 @@ export default function Dashboard() {
             </Link>
           )}
 
-          {/* Tombol Admin Approval Khusus Role Admin */}
+          {/* TOMBOL KHUSUS ADMIN: TAMBAH BARANG & APPROVAL */}
           {currentUser?.role === 'ADMIN' && (
-            <Link
-              href="/admin/requests"
-              className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
-            >
-              <Clock className="w-4 h-4" /> Approval Admin
-            </Link>
+            <>
+              <button
+                onClick={() => setAddModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+              >
+                <PackagePlus className="w-4 h-4" /> Tambah Barang
+              </button>
+
+              <Link
+                href="/admin/requests"
+                className="flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+              >
+                <Clock className="w-4 h-4" /> Approval Admin
+              </Link>
+            </>
           )}
 
           <button 
             onClick={fetchSpareParts}
-            className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium"
+            className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-3.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
           </button>
@@ -250,22 +274,34 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      <div className="flex gap-1">
-                        <button 
-                          onClick={() => handleOpenModal(item, 'MASUK')}
-                          className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition"
-                          title="Request Tambah Stok"
+                      {/* KHUSUS TEKNISI ATAU ADMIN */}
+                      {isAuthorizedUser ? (
+                        <div className="flex gap-1">
+                          <button 
+                            onClick={() => handleOpenModal(item, 'MASUK')}
+                            className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition"
+                            title="Request Tambah Stok"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => handleOpenModal(item, 'KELUAR')}
+                            className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition"
+                            title="Request Ambil Stok"
+                          >
+                            <Minus className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        /* UNTUK PENGUNJUNG UMUM */
+                        <Link 
+                          href="/login"
+                          className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 px-2.5 py-1.5 rounded-lg transition border border-slate-200 font-medium"
+                          title="Login sebagai Teknisi / Admin untuk request stok"
                         >
-                          <Plus className="w-4 h-4" />
-                        </button>
-                        <button 
-                          onClick={() => handleOpenModal(item, 'KELUAR')}
-                          className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition"
-                          title="Request Ambil Stok"
-                        >
-                          <Minus className="w-4 h-4" />
-                        </button>
-                      </div>
+                          <Lock className="w-3.5 h-3.5" /> Login Req
+                        </Link>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -275,11 +311,19 @@ export default function Dashboard() {
         )}
       </main>
 
+      {/* MODAL REQUEST STOK */}
       <RequestModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
         type={requestType}
         item={selectedItem}
+        onSuccess={fetchSpareParts}
+      />
+
+      {/* MODAL TAMBAH BARANG BARU (KHUSUS ADMIN) */}
+      <AddPartModal
+        isOpen={addModalOpen}
+        onClose={() => setAddModalOpen(false)}
         onSuccess={fetchSpareParts}
       />
     </div>

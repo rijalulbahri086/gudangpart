@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
+import { useRouter } from 'next/navigation';
 import { 
   Check, 
   X, 
@@ -30,20 +31,52 @@ interface StockRequest {
     unit: string;
     stock: number;
   } | null;
-  users: {
-    name: string;
+  requester: {
+    full_name: string;
     email: string;
   } | null;
 }
 
 export default function AdminRequestsPage() {
+  const router = useRouter();
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [authorized, setAuthorized] = useState<boolean>(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Fetch semua request yang statusnya PENDING
+  // Verifikasi Hak Akses Admin
+  useEffect(() => {
+    const checkAdminAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        router.push('/login');
+        return;
+      }
+
+      const { data: userData } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', session.user.id)
+        .single();
+
+      if (userData?.role !== 'ADMIN') {
+        alert('Akses Ditolak: Halaman ini khusus untuk Admin!');
+        router.push('/');
+        return;
+      }
+
+      setAuthorized(true);
+      fetchRequests();
+    };
+
+    checkAdminAuth();
+  }, [router]);
+
   const fetchRequests = async () => {
     setLoading(true);
+
+    // PERBAIKAN: Menentukan relasi spesifik menggunakan requester_id
     const { data, error } = await supabase
       .from('stock_requests')
       .select(`
@@ -55,7 +88,7 @@ export default function AdminRequestsPage() {
         status,
         created_at,
         spare_parts (id, name, unit, stock),
-        users (name, email)
+        requester:users!requester_id (full_name, email)
       `)
       .eq('status', 'PENDING')
       .order('created_at', { ascending: false });
@@ -68,11 +101,6 @@ export default function AdminRequestsPage() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    fetchRequests();
-  }, []);
-
-  // Handler untuk APPROVE Request
   const handleApprove = async (req: StockRequest) => {
     if (!req.spare_parts) return;
 
@@ -84,7 +112,8 @@ export default function AdminRequestsPage() {
     setProcessingId(req.id);
 
     try {
-      // 1. Hitung stok baru
+      const { data: { session } } = await supabase.auth.getSession();
+
       const currentStock = req.spare_parts.stock;
       const newStock = req.type === 'MASUK' 
         ? currentStock + req.quantity 
@@ -94,7 +123,6 @@ export default function AdminRequestsPage() {
         throw new Error('Stok tidak mencukupi untuk disetujui!');
       }
 
-      // 2. Update stok di tabel spare_parts
       const { error: updateStockError } = await supabase
         .from('spare_parts')
         .update({ stock: newStock })
@@ -102,7 +130,6 @@ export default function AdminRequestsPage() {
 
       if (updateStockError) throw updateStockError;
 
-      // 3. Update status request menjadi APPROVED
       const { error: updateReqError } = await supabase
         .from('stock_requests')
         .update({ status: 'APPROVED' })
@@ -110,14 +137,15 @@ export default function AdminRequestsPage() {
 
       if (updateReqError) throw updateReqError;
 
-      // 4. Catat riwayat di stock_logs
-      await supabase.from('stock_logs').insert({
-        spare_part_id: req.spare_parts.id,
-        user_id: '2b9820c2-9ed4-46f8-ab4a-b6fa57605df3', // ID Admin / User
-        type: req.type,
-        quantity: req.quantity,
-        notes: `Approval Request: ${req.notes}`
-      });
+      if (session?.user?.id) {
+        await supabase.from('stock_logs').insert({
+          spare_part_id: req.spare_parts.id,
+          user_id: session.user.id,
+          type: req.type,
+          quantity: req.quantity,
+          notes: `Approval Request: ${req.notes}`
+        });
+      }
 
       alert('Request berhasil disetujui & stok telah diperbarui!');
       fetchRequests();
@@ -128,7 +156,6 @@ export default function AdminRequestsPage() {
     }
   };
 
-  // Handler untuk REJECT Request
   const handleReject = async (reqId: string) => {
     const confirmReject = confirm('Tolak request stok ini?');
     if (!confirmReject) return;
@@ -152,9 +179,19 @@ export default function AdminRequestsPage() {
     }
   };
 
+  if (!authorized) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="text-center text-slate-500 flex flex-col items-center gap-2">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+          <span>Memverifikasi Hak Akses Admin...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      {/* HEADER PAGE */}
       <header className="max-w-6xl mx-auto mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <Link 
@@ -177,7 +214,6 @@ export default function AdminRequestsPage() {
         </button>
       </header>
 
-      {/* DAFTAR REQUEST */}
       <main className="max-w-6xl mx-auto">
         {loading ? (
           <div className="text-center py-12 text-slate-500">Memuat pengajuan stok...</div>
@@ -195,7 +231,6 @@ export default function AdminRequestsPage() {
                   key={req.id}
                   className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row items-start md:items-center justify-between gap-6"
                 >
-                  {/* INFORMASI BARANG & PEMOHON */}
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center gap-2">
                       <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
@@ -218,7 +253,7 @@ export default function AdminRequestsPage() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-slate-600">
                       <div className="flex items-center gap-1.5">
                         <User className="w-4 h-4 text-slate-400" />
-                        <span>Pemohon: <b>{req.users?.name || 'Teknisi'}</b></span>
+                        <span>Pemohon: <b>{req.requester?.full_name || 'Teknisi'}</b></span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <FileText className="w-4 h-4 text-slate-400" />
@@ -231,9 +266,7 @@ export default function AdminRequestsPage() {
                     </p>
                   </div>
 
-                  {/* FOTO BUKTI & ACTION BUTTONS */}
                   <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row items-center gap-4 w-full md:w-auto justify-end border-t md:border-t-0 pt-4 md:pt-0 border-slate-100">
-                    {/* Foto Bukti jika ada */}
                     {req.proof_image_url ? (
                       <a 
                         href={req.proof_image_url} 
@@ -255,7 +288,6 @@ export default function AdminRequestsPage() {
                       </div>
                     )}
 
-                    {/* Tombol Approval */}
                     <div className="flex items-center gap-2 w-full sm:w-auto">
                       <button
                         onClick={() => handleReject(req.id)}

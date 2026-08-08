@@ -32,7 +32,6 @@ export default function RequestModal({
   const [uploading, setUploading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
-  // Reset state form setiap kali modal ditutup/dibuka
   useEffect(() => {
     if (isOpen) {
       setQuantity(1);
@@ -46,7 +45,6 @@ export default function RequestModal({
 
   const isStockIn = type === 'MASUK';
 
-  // Handler Upload Foto ke Supabase Storage
   const uploadImage = async (file: File): Promise<string> => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -73,18 +71,52 @@ export default function RequestModal({
     setErrorMsg('');
 
     try {
+      // 1. Ambil session user aktif
+      const { data: { session } } = await supabase.auth.getSession();
+      let validUserId: string | null = null;
+
+      if (session?.user?.id) {
+        // Cek apakah ID dari session Auth terdaftar di tabel users
+        const { data: matchedUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (matchedUser) {
+          validUserId = matchedUser.id;
+        }
+      }
+
+      // 2. Jika ID session tidak terdaftar / belum login, ambil ID user pertama dari tabel users
+      if (!validUserId) {
+        const { data: fallbackUser } = await supabase
+          .from('users')
+          .select('id')
+          .limit(1)
+          .maybeSingle();
+
+        if (fallbackUser) {
+          validUserId = fallbackUser.id;
+        }
+      }
+
+      if (!validUserId) {
+        throw new Error('Data pemohon tidak ditemukan di tabel users. Pastikan tabel users di Supabase memiliki minimal 1 baris data!');
+      }
+
       let proofImageUrl: string | null = null;
 
       if (isStockIn && imageFile) {
         proofImageUrl = await uploadImage(imageFile);
       }
 
-      // Mengirim request dengan requester_id resmi Teknisi Lapangan
+      // 3. Insert ke stock_requests dengan ID yang tervalidasi
       const { error: insertError } = await supabase
         .from('stock_requests')
         .insert({
           spare_part_id: item.id,
-          requester_id: '2b9820c2-9ed4-46f8-ab4a-b6fa57605df3',
+          requester_id: validUserId,
           type,
           quantity: Number(quantity),
           notes,
@@ -110,7 +142,6 @@ export default function RequestModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
       <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl transition-all">
-        {/* Tombol Close */}
         <button
           type="button"
           onClick={onClose}
@@ -119,7 +150,6 @@ export default function RequestModal({
           <X className="h-5 w-5" />
         </button>
 
-        {/* Header */}
         <h2 className="mb-1 text-xl font-bold text-slate-800">
           {isStockIn ? '📦 Request Tambah Stok' : '📤 Request Ambil Stok'}
         </h2>
@@ -130,7 +160,6 @@ export default function RequestModal({
           <span className="text-xs text-slate-400">(Sisa: {item.stock} {item.unit})</span>
         </p>
 
-        {/* Display Error Message */}
         {errorMsg && (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-600">
             {errorMsg}
@@ -138,7 +167,6 @@ export default function RequestModal({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Input Jumlah */}
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
               Jumlah ({item.unit})
@@ -154,7 +182,6 @@ export default function RequestModal({
             />
           </div>
 
-          {/* Input Catatan / Alasan */}
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
               Alasan {isStockIn ? 'Penambahan' : 'Pengambilan'}
@@ -173,7 +200,6 @@ export default function RequestModal({
             />
           </div>
 
-          {/* Upload Foto (Khusus Stok MASUK) */}
           {isStockIn && (
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
@@ -216,7 +242,6 @@ export default function RequestModal({
             </div>
           )}
 
-          {/* Action Buttons */}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
