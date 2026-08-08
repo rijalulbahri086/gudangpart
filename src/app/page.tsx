@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import RequestModal from '@/app/components/RequestModal';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   Search, 
   Package, 
@@ -13,6 +14,9 @@ import {
   Minus, 
   RefreshCw,
   Clock,
+  LogOut,
+  LogIn,
+  User,
   Image as ImageIcon 
 } from 'lucide-react';
 
@@ -35,16 +39,40 @@ interface SparePart {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
   const [items, setItems] = useState<SparePart[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  
+  // State User & Auth
+  const [currentUser, setCurrentUser] = useState<{ id: string; email?: string; name?: string; role?: string } | null>(null);
 
   // State Modal Request
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [requestType, setRequestType] = useState<'MASUK' | 'KELUAR'>('MASUK');
   const [selectedItem, setSelectedItem] = useState<SparePart | null>(null);
 
-  // Fetch data dari Supabase
+  // Cek Session User jika ada (Tanpa Auto Redirect)
+  const checkSession = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      const { data: userData } = await supabase
+        .from('users')
+        .select('name, role')
+        .eq('id', session.user.id)
+        .single();
+
+      setCurrentUser({
+        id: session.user.id,
+        email: session.user.email,
+        name: userData?.name || session.user.email,
+        role: userData?.role || 'TEKNISI'
+      });
+    } else {
+      setCurrentUser(null);
+    }
+  };
+
   const fetchSpareParts = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -61,8 +89,15 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    checkSession();
     fetchSpareParts();
   }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setCurrentUser(null);
+    router.refresh();
+  };
 
   const handleOpenModal = (item: SparePart, type: 'MASUK' | 'KELUAR') => {
     setSelectedItem(item);
@@ -70,7 +105,6 @@ export default function Dashboard() {
     setModalOpen(true);
   };
 
-  // Filter Pencarian Pintar
   const filteredItems = items.filter((item) => {
     const q = searchQuery.toLowerCase();
     const matchName = item.name.toLowerCase().includes(q);
@@ -94,14 +128,38 @@ export default function Dashboard() {
           <p className="text-sm text-slate-500">Sistem Manajemen Stok & Pencarian Spare Part</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Tombol Navigasi ke Halaman Admin Requests */}
-          <Link
-            href="/admin/requests"
-            className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
-          >
-            <Clock className="w-4 h-4" /> Approval Admin
-          </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* USER INFO / TOMBOL LOGIN */}
+          {currentUser ? (
+            <div className="flex items-center gap-2 bg-white p-1.5 pl-3 rounded-xl border border-slate-200 shadow-sm text-xs text-slate-700">
+              <User className="w-4 h-4 text-blue-500" />
+              <span><b>{currentUser.name}</b> ({currentUser.role})</span>
+              <button 
+                onClick={handleLogout} 
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-red-500 transition ml-1"
+                title="Keluar / Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+            >
+              <LogIn className="w-4 h-4" /> Login
+            </Link>
+          )}
+
+          {/* Tombol Admin Approval Khusus Role Admin */}
+          {currentUser?.role === 'ADMIN' && (
+            <Link
+              href="/admin/requests"
+              className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+            >
+              <Clock className="w-4 h-4" /> Approval Admin
+            </Link>
+          )}
 
           <button 
             onClick={fetchSpareParts}
@@ -144,7 +202,6 @@ export default function Dashboard() {
                   key={item.id} 
                   className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between"
                 >
-                  {/* AREA FOTO BARANG */}
                   <div className="relative h-48 bg-slate-100 flex items-center justify-center overflow-hidden border-b border-slate-100">
                     {item.image_url ? (
                       <img 
@@ -164,7 +221,6 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* DETAIL INFORMASI BARANG */}
                   <div className="p-4 flex-1 flex flex-col justify-between">
                     <div>
                       <div className="flex items-start justify-between gap-2 mb-1">
@@ -181,7 +237,6 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* INDICATOR STOK & ACTION */}
                     <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                       <div>
                         <span className="text-xs text-slate-400 block">Sisa Stok</span>
@@ -220,7 +275,6 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* MODAL FORM REQUEST */}
       <RequestModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
