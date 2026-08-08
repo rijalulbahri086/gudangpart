@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
+import RequestModal from '@/app/components/RequestModal';
+import Link from 'next/link';
 import { 
   Search, 
   Package, 
@@ -10,10 +12,10 @@ import {
   Plus, 
   Minus, 
   RefreshCw,
+  Clock,
   Image as ImageIcon 
 } from 'lucide-react';
 
-// Interface sesuai 14 atribut database spare_parts
 interface SparePart {
   id: string;
   sku: string | null;
@@ -37,6 +39,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // State Modal Request
+  const [modalOpen, setModalOpen] = useState<boolean>(false);
+  const [requestType, setRequestType] = useState<'MASUK' | 'KELUAR'>('MASUK');
+  const [selectedItem, setSelectedItem] = useState<SparePart | null>(null);
+
   // Fetch data dari Supabase
   const fetchSpareParts = async () => {
     setLoading(true);
@@ -57,7 +64,13 @@ export default function Dashboard() {
     fetchSpareParts();
   }, []);
 
-  // Filter Pencarian Pintar (Nama, Part Number, SKU, Area, Rak, atau Alias)
+  const handleOpenModal = (item: SparePart, type: 'MASUK' | 'KELUAR') => {
+    setSelectedItem(item);
+    setRequestType(type);
+    setModalOpen(true);
+  };
+
+  // Filter Pencarian Pintar
   const filteredItems = items.filter((item) => {
     const q = searchQuery.toLowerCase();
     const matchName = item.name.toLowerCase().includes(q);
@@ -80,12 +93,23 @@ export default function Dashboard() {
           </h1>
           <p className="text-sm text-slate-500">Sistem Manajemen Stok & Pencarian Spare Part</p>
         </div>
-        <button 
-          onClick={fetchSpareParts}
-          className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh Data
-        </button>
+
+        <div className="flex items-center gap-2">
+          {/* Tombol Navigasi ke Halaman Admin Requests */}
+          <Link
+            href="/admin/requests"
+            className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+          >
+            <Clock className="w-4 h-4" /> Approval Admin
+          </Link>
+
+          <button 
+            onClick={fetchSpareParts}
+            className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
       </header>
 
       {/* SEARCH BAR PINTAR */}
@@ -135,7 +159,6 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {/* BADGE KONDISI BARANG */}
                     <span className="absolute top-2 right-2 bg-slate-900/80 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full backdrop-blur-sm">
                       {item.condition}
                     </span>
@@ -152,7 +175,6 @@ export default function Dashboard() {
                         <p className="text-xs font-mono text-slate-500 mb-2">PN: {item.part_number}</p>
                       )}
 
-                      {/* LOKASI RAK */}
                       <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-3 bg-slate-50 p-2 rounded-lg">
                         <MapPin className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                         <span>{item.area_location || 'Area -'} • <b>{item.rack_location || 'Rak -'}</b></span>
@@ -173,15 +195,16 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      {/* TOMBOL PENGAJUAN TEKNISI */}
                       <div className="flex gap-1">
                         <button 
+                          onClick={() => handleOpenModal(item, 'MASUK')}
                           className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition"
                           title="Request Tambah Stok"
                         >
                           <Plus className="w-4 h-4" />
                         </button>
                         <button 
+                          onClick={() => handleOpenModal(item, 'KELUAR')}
                           className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition"
                           title="Request Ambil Stok"
                         >
@@ -196,6 +219,15 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+
+      {/* MODAL FORM REQUEST */}
+      <RequestModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        type={requestType}
+        item={selectedItem}
+        onSuccess={fetchSpareParts}
+      />
     </div>
   );
 }
