@@ -7,7 +7,7 @@ import { Package, Lock, User, Loader2, AlertCircle } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('');
+  const [usernameInput, setUsernameInput] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -17,36 +17,71 @@ export default function LoginPage() {
     setLoading(true);
     setErrorMsg('');
 
-    try {
-      // 1. Cari Email berdasarkan Username dari tabel users
-      const { data: userProfile, error: profileError } = await supabase
-        .from('users')
-        .select('id, email, role')
-        .eq('username', username.trim().toLowerCase())
-        .single();
+    const cleanInput = usernameInput.trim().toLowerCase();
 
-      if (profileError || !userProfile || !userProfile.email) {
-        throw new Error('Username tidak ditemukan!');
+    try {
+      let targetEmail = cleanInput;
+
+      // 1. Cek apakah input berupa Email atau Username
+      const isEmail = cleanInput.includes('@');
+
+      if (!isEmail) {
+        // Jika input adalah Username, cari data user & email aslinya di tabel public.users
+        const { data: userProfile, error: profileError } = await supabase
+          .from('users')
+          .select('id, username, role, email')
+          .eq('username', cleanInput)
+          .maybeSingle();
+
+        if (profileError) {
+          throw new Error(`Gagal memverifikasi akun: ${profileError.message}`);
+        }
+
+        if (!userProfile) {
+          throw new Error('Username tidak ditemukan di database!');
+        }
+
+        if (!userProfile.email) {
+          throw new Error('Email tidak terhubung dengan username ini. Hubungi Admin.');
+        }
+
+        targetEmail = userProfile.email;
       }
 
-      // 2. Login ke Supabase Auth menggunakan Email yang ditemukan & Password
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: userProfile.email,
-        password,
+      // 2. Autentikasi ke Supabase Auth menggunakan Email asli & Password
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: targetEmail,
+        password: password,
       });
 
-      if (authError) throw authError;
+      if (authError) {
+        if (authError.message.includes('Invalid login credentials')) {
+          throw new Error('Password yang Anda masukkan salah.');
+        }
+        throw authError;
+      }
 
-      if (data.user) {
-        // Redirect sesuai role user
-        if (userProfile.role === 'ADMIN') {
+      if (authData?.user) {
+        // 3. Ambil Role User setelah login berhasil
+        const { data: userData } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', authData.user.id)
+          .maybeSingle();
+
+        const userRole = userData?.role || 'TEKNISI';
+
+        // Redirect berdasarkan role
+        if (userRole === 'ADMIN') {
           router.push('/admin/requests');
         } else {
           router.push('/');
         }
+        router.refresh();
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Username atau password salah. Coba lagi!');
+      console.error('Login Error:', err);
+      setErrorMsg(err.message || 'Gagal login. Silakan periksa kembali username/password Anda.');
     } finally {
       setLoading(false);
     }
@@ -72,19 +107,19 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* FORM LOGIN USERNAME & PASSWORD */}
+        {/* FORM LOGIN USERNAME / EMAIL & PASSWORD */}
         <form onSubmit={handleLogin} className="space-y-5">
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-              Username
+              Username / Email
             </label>
             <div className="relative">
               <User className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Masukkan username kamu"
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
+                placeholder="Masukkan username atau email"
                 className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition text-sm"
                 required
               />
