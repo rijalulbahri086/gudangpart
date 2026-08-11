@@ -3,22 +3,24 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { 
   Check, 
   X, 
   Clock, 
+  ArrowLeft, 
+  RefreshCw, 
   Package, 
   User, 
-  FileText, 
-  Image as ImageIcon,
-  ArrowLeft,
-  RefreshCw,
-  Loader2
+  FileText,
+  Loader2,
+  CheckCircle2
 } from 'lucide-react';
-import Link from 'next/link';
 
 interface StockRequest {
   id: string;
+  spare_part_id: string;
+  requester_id: string;
   type: 'MASUK' | 'KELUAR';
   quantity: number;
   notes: string;
@@ -26,10 +28,9 @@ interface StockRequest {
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   created_at: string;
   spare_parts: {
-    id: string;
     name: string;
-    unit: string;
     stock: number;
+    unit: string;
   } | null;
   requester: {
     full_name: string;
@@ -41,127 +42,112 @@ export default function AdminRequestsPage() {
   const router = useRouter();
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [authorized, setAuthorized] = useState<boolean>(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Verifikasi Hak Akses Admin
-  useEffect(() => {
-    const checkAdminAuth = async () => {
+  const fetchRequests = async () => {
+    setLoading(true);
+    try {
       const { data: { session } } = await supabase.auth.getSession();
-
       if (!session) {
         router.push('/login');
         return;
       }
 
-      const { data: userData } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', session.user.id)
-        .single();
+      const { data, error } = await supabase
+        .from('stock_requests')
+        .select(`
+          id,
+          spare_part_id,
+          requester_id,
+          type,
+          quantity,
+          notes,
+          proof_image_url,
+          status,
+          created_at,
+          spare_parts (name, stock, unit),
+          requester:users!requester_id (full_name, email)
+        `)
+        .order('created_at', { ascending: false });
 
-      if (userData?.role !== 'ADMIN') {
-        alert('Akses Ditolak: Halaman ini khusus untuk Admin!');
-        router.push('/');
-        return;
-      }
-
-      setAuthorized(true);
-      fetchRequests();
-    };
-
-    checkAdminAuth();
-  }, [router]);
-
-  const fetchRequests = async () => {
-    setLoading(true);
-
-    // PERBAIKAN: Menentukan relasi spesifik menggunakan requester_id
-    const { data, error } = await supabase
-      .from('stock_requests')
-      .select(`
-        id,
-        type,
-        quantity,
-        notes,
-        proof_image_url,
-        status,
-        created_at,
-        spare_parts (id, name, unit, stock),
-        requester:users!requester_id (full_name, email)
-      `)
-      .eq('status', 'PENDING')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching requests:', error.message);
-    } else {
+      if (error) throw error;
       setRequests((data as unknown as StockRequest[]) || []);
+    } catch (err: any) {
+      console.error('Error fetching requests:', err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
+  useEffect(() => {
+    fetchRequests();
+  }, []);
+
   const handleApprove = async (req: StockRequest) => {
-    if (!req.spare_parts) return;
-
-    const confirmApprove = confirm(
-      `Setujui request ${req.type === 'MASUK' ? 'penambahan' : 'pengambilan'} ${req.quantity} ${req.spare_parts.unit} ${req.spare_parts.name}?`
-    );
-    if (!confirmApprove) return;
-
     setProcessingId(req.id);
-
     try {
       const { data: { session } } = await supabase.auth.getSession();
-
-      const currentStock = req.spare_parts.stock;
+      const currentStock = req.spare_parts?.stock || 0;
       const newStock = req.type === 'MASUK' 
         ? currentStock + req.quantity 
         : currentStock - req.quantity;
 
       if (newStock < 0) {
-        throw new Error('Stok tidak mencukupi untuk disetujui!');
+        alert('Gagal: Sisa stok barang tidak mencukupi untuk request ini!');
+        setProcessingId(null);
+        return;
       }
 
-      const { error: updateStockError } = await supabase
+      // 1. Update stok di spare_parts
+      const { error: stockError } = await supabase
         .from('spare_parts')
         .update({ stock: newStock })
-        .eq('id', req.spare_parts.id);
+        .eq('id', req.spare_part_id);
 
-      if (updateStockError) throw updateStockError;
+      if (stockError) throw stockError;
 
-      const { error: updateReqError } = await supabase
+      // 2. Update status request jadi APPROVED
+      const { error: reqError } = await supabase
         .from('stock_requests')
-        .update({ status: 'APPROVED' })
+        .update({ 
+          status: 'APPROVED',
+          approved_by: session?.user?.id || req.requester_id
+        })
         .eq('id', req.id);
 
-      if (updateReqError) throw updateReqError;
+      if (reqError) throw reqError;
 
-      if (session?.user?.id) {
-        await supabase.from('stock_logs').insert({
-          spare_part_id: req.spare_parts.id,
-          user_id: session.user.id,
+      // 3. Catat log ke stock_logs sesuai struktur tabel SQL ke-3
+      const { error: logError } = await supabase
+        .from('stock_logs')
+        .insert({
+          request_id: req.id,
+          spare_part_id: req.spare_part_id,
+          actor_id: session?.user?.id || req.requester_id,
           type: req.type,
           quantity: req.quantity,
-          notes: `Approval Request: ${req.notes}`
+          stock_before: currentStock,
+          stock_after: newStock
         });
+
+      if (logError) {
+        console.error('Gagal mencatat log:', logError.message);
       }
 
-      alert('Request berhasil disetujui & stok telah diperbarui!');
+      alert('Request berhasil disetujui & log riwayat stok telah dicatat!');
       fetchRequests();
     } catch (err: any) {
-      alert(`Gagal menyetujui: ${err.message}`);
+      alert(`Terjadi kesalahan: ${err.message}`);
     } finally {
       setProcessingId(null);
     }
   };
 
   const handleReject = async (reqId: string) => {
-    const confirmReject = confirm('Tolak request stok ini?');
+    const confirmReject = confirm('Apakah Anda yakin ingin menolak pengajuan ini?');
     if (!confirmReject) return;
 
     setProcessingId(reqId);
-
     try {
       const { error } = await supabase
         .from('stock_requests')
@@ -170,29 +156,18 @@ export default function AdminRequestsPage() {
 
       if (error) throw error;
 
-      alert('Request berhasil ditolak.');
+      alert('Pengajuan berhasil ditolak.');
       fetchRequests();
     } catch (err: any) {
-      alert(`Gagal menolak: ${err.message}`);
+      alert(`Gagal menolak request: ${err.message}`);
     } finally {
       setProcessingId(null);
     }
   };
 
-  if (!authorized) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="text-center text-slate-500 flex flex-col items-center gap-2">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          <span>Memverifikasi Hak Akses Admin...</span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <header className="max-w-6xl mx-auto mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <header className="max-w-5xl mx-auto mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <Link 
             href="/" 
@@ -201,115 +176,126 @@ export default function AdminRequestsPage() {
             <ArrowLeft className="w-4 h-4" /> Kembali ke Dashboard
           </Link>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-800 flex items-center gap-2">
-            <Clock className="text-amber-500 w-8 h-8" /> Persetujuan Request Stok
+            <Clock className="text-amber-500 w-8 h-8" /> Approval Request Stok
           </h1>
-          <p className="text-sm text-slate-500">Daftar pengajuan penambahan dan pengambilan barang oleh teknisi</p>
+          <p className="text-sm text-slate-500">Persetujuan pengajuan barang dari teknisi gudang</p>
         </div>
 
         <button 
           onClick={fetchRequests}
-          className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium self-start sm:self-auto"
+          className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium self-start sm:self-auto"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
         </button>
       </header>
 
-      <main className="max-w-6xl mx-auto">
+      <main className="max-w-5xl mx-auto">
         {loading ? (
-          <div className="text-center py-12 text-slate-500">Memuat pengajuan stok...</div>
+          <div className="text-center py-16 text-slate-500 flex flex-col items-center gap-2">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            <span>Memuat pengajuan stok...</span>
+          </div>
         ) : requests.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 text-slate-500 shadow-sm">
-            🎉 Tidak ada request stok gantung saat ini. Semua pengajuan sudah diproses!
+          <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500 shadow-sm p-6">
+            <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+            <h3 className="font-bold text-slate-700 text-lg mb-1">Semua Pengajuan Selesai</h3>
+            <p className="text-sm text-slate-400">Belum ada request pengajuan stok baru saat ini.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="space-y-4">
             {requests.map((req) => {
-              const isProcessing = processingId === req.id;
+              const isPending = req.status === 'PENDING';
 
               return (
                 <div 
                   key={req.id}
-                  className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row items-start md:items-center justify-between gap-6"
+                  className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4"
                 >
                   <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
                         req.type === 'MASUK' 
                           ? 'bg-emerald-100 text-emerald-800' 
                           : 'bg-amber-100 text-amber-800'
                       }`}>
                         {req.type === 'MASUK' ? '📦 STOK MASUK' : '📤 STOK KELUAR'}
                       </span>
+
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                        req.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-700' :
+                        req.status === 'REJECTED' ? 'bg-rose-100 text-rose-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}>
+                        {req.status}
+                      </span>
+
                       <span className="text-xs text-slate-400">
-                        {new Date(req.created_at).toLocaleString('id-ID')}
+                        {new Date(req.created_at).toLocaleString('id-ID', {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
                       </span>
                     </div>
 
                     <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                       <Package className="w-5 h-5 text-blue-500 shrink-0" />
-                      {req.spare_parts?.name || 'Barang Tidak Ditemukan'}
+                      {req.spare_parts?.name || 'Barang Dihapus'}
                     </h3>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-slate-600">
-                      <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-slate-600">
+                      <div className="flex items-center gap-1">
                         <User className="w-4 h-4 text-slate-400" />
                         <span>Pemohon: <b>{req.requester?.full_name || 'Teknisi'}</b></span>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <FileText className="w-4 h-4 text-slate-400" />
-                        <span>Jumlah: <b className="text-blue-600">{req.quantity} {req.spare_parts?.unit}</b> (Sisa Stok: {req.spare_parts?.stock})</span>
+                        <span>Jumlah: <b className="text-blue-600">{req.quantity} {req.spare_parts?.unit || 'Pcs'}</b></span>
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                      <b>Alasan:</b> "{req.notes}"
+                    <p className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <b>Catatan Pemohon:</b> "{req.notes || 'Tanpa alasan.'}"
                     </p>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row items-center gap-4 w-full md:w-auto justify-end border-t md:border-t-0 pt-4 md:pt-0 border-slate-100">
-                    {req.proof_image_url ? (
+                  <div className="flex items-center gap-4 w-full lg:w-auto justify-between lg:justify-end border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
+                    {req.proof_image_url && (
                       <a 
                         href={req.proof_image_url} 
                         target="_blank" 
                         rel="noreferrer"
-                        className="relative group w-20 h-20 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 shrink-0 flex items-center justify-center"
-                        title="Klik untuk memperbesar foto"
+                        className="w-16 h-16 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 shrink-0"
+                        title="Lihat foto bukti"
                       >
-                        <img 
-                          src={req.proof_image_url} 
-                          alt="Bukti Request" 
-                          className="w-full h-full object-cover group-hover:scale-105 transition"
-                        />
+                        <img src={req.proof_image_url} alt="Bukti" className="w-full h-full object-cover" />
                       </a>
-                    ) : (
-                      <div className="w-20 h-20 bg-slate-50 rounded-xl border border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 text-[10px] shrink-0">
-                        <ImageIcon className="w-5 h-5 mb-1 text-slate-300" />
-                        Tanpa Foto
-                      </div>
                     )}
 
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <button
-                        onClick={() => handleReject(req.id)}
-                        disabled={isProcessing}
-                        className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 transition text-sm font-semibold disabled:opacity-50"
-                      >
-                        <X className="w-4 h-4" /> Tolak
-                      </button>
-
-                      <button
-                        onClick={() => handleApprove(req)}
-                        disabled={isProcessing}
-                        className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition text-sm font-semibold shadow-sm disabled:opacity-50"
-                      >
-                        {isProcessing ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Check className="w-4 h-4" />
-                        )}
-                        Setujui
-                      </button>
-                    </div>
+                    {isPending ? (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleReject(req.id)}
+                          disabled={processingId === req.id}
+                          className="flex items-center gap-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50"
+                        >
+                          <X className="w-4 h-4" /> Tolak
+                        </button>
+                        <button
+                          onClick={() => handleApprove(req)}
+                          disabled={processingId === req.id}
+                          className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50"
+                        >
+                          {processingId === req.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Check className="w-4 h-4" />
+                          )}
+                          Setujui
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400 font-medium">Selesai Diproses</span>
+                    )}
                   </div>
                 </div>
               );

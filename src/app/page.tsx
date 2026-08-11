@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import RequestModal from '@/app/components/RequestModal';
 import AddPartModal from '@/app/components/AddPartModal';
+import EditPartModal from '@/app/components/EditPartModal';
+import PartDetailModal from '@/app/components/PartDetailModal';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
@@ -20,6 +22,10 @@ import {
   User,
   Lock,
   PackagePlus,
+  Pencil,
+  Trash2,
+  Inbox,
+  History,
   Image as ImageIcon 
 } from 'lucide-react';
 
@@ -50,13 +56,21 @@ export default function Dashboard() {
   // State User & Auth
   const [currentUser, setCurrentUser] = useState<{ id: string; email?: string; name?: string; role?: string } | null>(null);
 
-  // State Modal Request
+  // State Modal Request (+ / -)
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [requestType, setRequestType] = useState<'MASUK' | 'KELUAR'>('MASUK');
   const [selectedItem, setSelectedItem] = useState<SparePart | null>(null);
 
   // State Modal Tambah Barang Baru
   const [addModalOpen, setAddModalOpen] = useState<boolean>(false);
+
+  // State Modal Edit Barang
+  const [editModalOpen, setEditModalOpen] = useState<boolean>(false);
+  const [editingItem, setEditingItem] = useState<SparePart | null>(null);
+
+  // State Modal Detail Barang
+  const [detailModalOpen, setDetailModalOpen] = useState<boolean>(false);
+  const [detailItem, setDetailItem] = useState<SparePart | null>(null);
 
   // Cek Session User
   const checkSession = async () => {
@@ -118,6 +132,37 @@ export default function Dashboard() {
     setModalOpen(true);
   };
 
+  const handleOpenEditModal = (item: SparePart) => {
+    setEditingItem(item);
+    setEditModalOpen(true);
+  };
+
+  const handleOpenDetailModal = (item: SparePart) => {
+    setDetailItem(item);
+    setDetailModalOpen(true);
+  };
+
+  const handleDeleteItem = async (item: SparePart) => {
+    const confirmDelete = confirm(`Apakah Anda yakin ingin menghapus barang "${item.name}" dari database?`);
+    if (!confirmDelete) return;
+
+    try {
+      const { error } = await supabase
+        .from('spare_parts')
+        .delete()
+        .eq('id', item.id);
+
+      if (error) {
+        throw new Error(`Gagal menghapus barang: ${error.message}`);
+      }
+
+      alert('Barang berhasil dihapus!');
+      fetchSpareParts();
+    } catch (err: any) {
+      alert(err.message || 'Terjadi kesalahan saat menghapus barang.');
+    }
+  };
+
   const filteredItems = items.filter((item) => {
     const q = searchQuery.toLowerCase();
     const matchName = item.name.toLowerCase().includes(q);
@@ -131,6 +176,7 @@ export default function Dashboard() {
   });
 
   const isAuthorizedUser = currentUser?.role === 'TEKNISI' || currentUser?.role === 'ADMIN';
+  const isAdmin = currentUser?.role === 'ADMIN';
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
@@ -166,8 +212,26 @@ export default function Dashboard() {
             </Link>
           )}
 
-          {/* TOMBOL KHUSUS ADMIN: TAMBAH BARANG & APPROVAL */}
-          {currentUser?.role === 'ADMIN' && (
+          {/* TOMBOL REQUEST SAYA */}
+          {currentUser && (
+            <Link
+              href="/my-requests"
+              className="flex items-center justify-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+            >
+              <Inbox className="w-4 h-4 text-blue-600" /> Request Saya
+            </Link>
+          )}
+
+          {/* TOMBOL RIWAYAT STOK */}
+          <Link
+            href="/stock-logs"
+            className="flex items-center justify-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+          >
+            <History className="w-4 h-4 text-slate-600" /> Riwayat Stok
+          </Link>
+
+          {/* TOMBOL KHUSUS ADMIN */}
+          {isAdmin && (
             <>
               <button
                 onClick={() => setAddModalOpen(true)}
@@ -224,14 +288,16 @@ export default function Dashboard() {
               return (
                 <div 
                   key={item.id} 
-                  className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between"
+                  onClick={() => handleOpenDetailModal(item)}
+                  className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-300 transition flex flex-col justify-between cursor-pointer group"
                 >
+                  {/* GAMBAR BARANG & BADGES */}
                   <div className="relative h-48 bg-slate-100 flex items-center justify-center overflow-hidden border-b border-slate-100">
                     {item.image_url ? (
                       <img 
                         src={item.image_url} 
                         alt={item.name} 
-                        className="w-full h-full object-cover" 
+                        className="w-full h-full object-cover group-hover:scale-105 transition duration-300" 
                       />
                     ) : (
                       <div className="flex flex-col items-center text-slate-400">
@@ -240,28 +306,71 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    <span className="absolute top-2 right-2 bg-slate-900/80 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full backdrop-blur-sm">
-                      {item.condition}
-                    </span>
+                    {/* BADGES GRADE (ORIGINAL / PABRIKASI) & KONDISI */}
+                    <div className="absolute top-2 right-2 flex gap-1 flex-wrap justify-end">
+                      <span 
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md backdrop-blur-sm shadow-sm ${
+                          item.grade === 'ORIGINAL' 
+                            ? 'bg-emerald-600/90 text-white' 
+                            : 'bg-indigo-600/90 text-white'
+                        }`}
+                      >
+                        {item.grade || 'ORIGINAL'}
+                      </span>
+                      <span className="bg-slate-900/80 text-white text-[10px] font-semibold px-2 py-0.5 rounded-md backdrop-blur-sm">
+                        {item.condition}
+                      </span>
+                    </div>
                   </div>
 
+                  {/* KONTEN KARTU */}
                   <div className="p-4 flex-1 flex flex-col justify-between">
                     <div>
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <h3 className="font-bold text-slate-800 text-base leading-tight">{item.name}</h3>
+                        <h3 className="font-bold text-slate-800 text-base leading-tight group-hover:text-blue-600 transition">
+                          {item.name}
+                        </h3>
+
+                        {/* TOMBOL EDIT & HAPUS KHUSUS ADMIN */}
+                        {isAdmin && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="flex items-center gap-1 shrink-0 bg-slate-100 p-1 rounded-lg border border-slate-200"
+                          >
+                            <button
+                              onClick={() => handleOpenEditModal(item)}
+                              className="p-1 hover:bg-white rounded text-blue-600 transition"
+                              title="Edit Barang"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteItem(item)}
+                              className="p-1 hover:bg-white rounded text-red-600 transition"
+                              title="Hapus Barang"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       
                       {item.part_number && (
                         <p className="text-xs font-mono text-slate-500 mb-2">PN: {item.part_number}</p>
                       )}
 
-                      <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-3 bg-slate-50 p-2 rounded-lg">
+                      {/* LOKASI RAK & AREA */}
+                      <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
                         <MapPin className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                        <span>{item.area_location || 'Area -'} • <b>{item.rack_location || 'Rak -'}</b></span>
+                        <span>{item.area_location || 'Area -'} • <b>Rak: {item.rack_location || '-'}</b></span>
                       </div>
                     </div>
 
-                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                    {/* SISA STOK & TOMBOL AKSI */}
+                    <div 
+                      onClick={(e) => e.stopPropagation()} 
+                      className="pt-3 border-t border-slate-100 flex items-center justify-between"
+                    >
                       <div>
                         <span className="text-xs text-slate-400 block">Sisa Stok</span>
                         <div className="flex items-center gap-1.5">
@@ -274,7 +383,7 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      {/* KHUSUS TEKNISI ATAU ADMIN */}
+                      {/* KHUSUS TEKNISI / ADMIN */}
                       {isAuthorizedUser ? (
                         <div className="flex gap-1">
                           <button 
@@ -325,6 +434,23 @@ export default function Dashboard() {
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
         onSuccess={fetchSpareParts}
+      />
+
+      {/* MODAL EDIT BARANG (KHUSUS ADMIN) */}
+      <EditPartModal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        item={editingItem}
+        onSuccess={fetchSpareParts}
+      />
+
+      {/* MODAL DETAIL BARANG */}
+      <PartDetailModal
+        isOpen={detailModalOpen}
+        onClose={() => setDetailModalOpen(false)}
+        item={detailItem}
+        onOpenRequest={handleOpenModal}
+        canRequest={isAuthorizedUser}
       />
     </div>
   );
