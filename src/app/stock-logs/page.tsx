@@ -18,10 +18,11 @@ import {
 } from 'lucide-react';
 
 interface StockLog {
-  id: string;
+  id: number;
   type: 'MASUK' | 'KELUAR';
   quantity: number;
-  notes?: string | null;
+  stock_before: number;
+  stock_after: number;
   created_at: string;
   spare_parts: {
     id: string;
@@ -29,9 +30,16 @@ interface StockLog {
     unit: string;
     part_number: string | null;
   } | null;
-  users: {
+  actor: {
     full_name: string;
-    email: string;
+    username: string;
+  } | null;
+  stock_requests: {
+    notes: string;
+    requester: {
+      full_name: string;
+      username: string;
+    } | null;
   } | null;
 }
 
@@ -50,9 +58,15 @@ export default function StockLogsPage() {
           id,
           type,
           quantity,
+          stock_before,
+          stock_after,
           created_at,
           spare_parts (id, name, unit, part_number),
-          users (full_name, email)
+          actor:users!actor_id (full_name, username),
+          stock_requests (
+            notes,
+            requester:users!requester_id (full_name, username)
+          )
         `)
         .order('created_at', { ascending: false });
 
@@ -76,8 +90,8 @@ export default function StockLogsPage() {
     const q = searchQuery.toLowerCase();
     const matchPartName = log.spare_parts?.name.toLowerCase().includes(q) || false;
     const matchPartNo = log.spare_parts?.part_number?.toLowerCase().includes(q) || false;
-    const matchUser = log.users?.full_name.toLowerCase().includes(q) || false;
-    const matchNotes = log.notes?.toLowerCase().includes(q) || false;
+    const matchUser = log.stock_requests?.requester?.full_name.toLowerCase().includes(q) || false;
+    const matchNotes = log.stock_requests?.notes?.toLowerCase().includes(q) || false;
 
     const matchType = filterType === 'ALL' || log.type === filterType;
 
@@ -117,7 +131,7 @@ export default function StockLogsPage() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari nama barang, teknisi, atau alasan..."
+            placeholder="Cari nama barang, petugas, atau alasan..."
             className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 transition shadow-sm"
           />
         </div>
@@ -180,8 +194,9 @@ export default function StockLogsPage() {
                     <th className="py-3.5 px-4">Waktu</th>
                     <th className="py-3.5 px-4">Tipe</th>
                     <th className="py-3.5 px-4">Nama Barang</th>
-                    <th className="py-3.5 px-4">Jumlah</th>
+                    <th className="py-3.5 px-4">Perubahan Stok</th>
                     <th className="py-3.5 px-4">Oleh (Petugas)</th>
+                    <th className="py-3.5 px-4">Alasan Request</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -233,10 +248,15 @@ export default function StockLogsPage() {
                           )}
                         </td>
 
-                        {/* Jumlah */}
-                        <td className="py-3.5 px-4 whitespace-nowrap font-bold text-slate-800">
-                          <span className={isMasuk ? 'text-emerald-600' : 'text-amber-600'}>
-                            {isMasuk ? '+' : '-'}{log.quantity} {log.spare_parts?.unit || 'Pcs'}
+                        {/* Perubahan Stok */}
+                        <td className="py-3.5 px-4 whitespace-nowrap text-xs">
+                          <div className="font-bold text-slate-800">
+                            <span className={isMasuk ? 'text-emerald-600' : 'text-amber-600'}>
+                              {isMasuk ? '+' : '-'}{log.quantity} {log.spare_parts?.unit || 'Pcs'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 block">
+                            Stok: {log.stock_before} ➔ <b>{log.stock_after}</b>
                           </span>
                         </td>
 
@@ -245,8 +265,16 @@ export default function StockLogsPage() {
                           <div className="flex items-center gap-1.5 text-xs">
                             <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                             <span className="font-semibold text-slate-700">
-                              {log.users?.full_name || 'System / Admin'}
+                              {log.stock_requests?.requester?.full_name || log.stock_requests?.requester?.username || log.actor?.full_name || 'admin'}
                             </span>
+                          </div>
+                        </td>
+
+                        {/* Alasan */}
+                        <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs">
+                          <div className="flex items-start gap-1">
+                            <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                            <span className="italic">{log.stock_requests?.notes || 'Tanpa catatan.'}</span>
                           </div>
                         </td>
                       </tr>
