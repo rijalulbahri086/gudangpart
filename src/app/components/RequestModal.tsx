@@ -31,6 +31,8 @@ export default function RequestModal({
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -45,17 +47,21 @@ export default function RequestModal({
 
   const isStockIn = type === 'MASUK';
 
-  const uploadImage = async (file: File): Promise<string> => {
+  const uploadImage = async (file: File): Promise<string | null > => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
     const filePath = `requests/${fileName}`;
 
-    const { error: uploadError } = await supabase.storage
+  const { data, error } = await supabase.storage
       .from('sparepart-images')
-      .upload(filePath, file);
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
 
-    if (uploadError) {
-      throw new Error(`Gagal mengunggah foto: ${uploadError.message}`);
+    if (error) {
+      console.error('Error uploading image:', error.message);
+      throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
     }
 
     const { data: publicUrlData } = supabase.storage
@@ -64,6 +70,28 @@ export default function RequestModal({
 
     return publicUrlData.publicUrl;
   };
+
+  const uploadProofImage = async (file: File): Promise<string | null> => {
+  const fileExt = file.name.split('.').pop();
+  const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+  const { data, error } = await supabase.storage
+    .from('sparepart-images')
+    .upload(fileName, file, {
+      cacheControl: '3600',
+      upsert: false,
+    });
+
+  if (error) {
+    throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
+  }
+
+  const { data: publicUrlData } = supabase.storage
+    .from('sparepart-images')
+    .getPublicUrl(data.path);
+
+  return publicUrlData.publicUrl;
+};
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -111,22 +139,32 @@ export default function RequestModal({
         proofImageUrl = await uploadImage(imageFile);
       }
 
-      // 3. Insert ke stock_requests dengan ID yang tervalidasi
+      let uploadedImageUrl: string | null = null;
+
+    // Jika teknisi memilih file foto, upload terlebih dahulu
+      if (proofFile) {
+        uploadedImageUrl = await uploadProofImage(proofFile);
+      }
+
       const { error: insertError } = await supabase
         .from('stock_requests')
-        .insert({
-          spare_part_id: item.id,
-          requester_id: validUserId,
-          type,
-          quantity: Number(quantity),
-          notes,
-          proof_image_url: proofImageUrl,
-          status: 'PENDING',
-        });
+        .insert([
+          {
+            spare_part_id: item.id,
+            requester_id:validUserId,
+            type,
+            quantity: quantity,
+            notes,
+            proof_image_url: uploadedImageUrl, // 👈 Memasukkan URL foto bukti ke DB
+            status: 'PENDING',
+          },
+        ]);
 
       if (insertError) {
         throw new Error(`Gagal mengirim request: ${insertError.message}`);
       }
+
+      
 
       alert(`Request ${isStockIn ? 'Tambah' : 'Ambil'} Stok berhasil dikirim ke Admin!`);
       onSuccess();
@@ -262,6 +300,32 @@ export default function RequestModal({
             </button>
           </div>
         </form>
+        {/* 🟢 BLOK INPUT FOTO BUKTI BARU */}
+      <div>
+        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+          Foto Bukti / Fisik Barang {type === 'MASUK' ? '(Sangat Dianjurkan)' : '(Opsional)'}
+        </label>
+        
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              setProofFile(file);
+              setPreviewUrl(URL.createObjectURL(file));
+            }
+          }}
+          className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer border border-slate-200 rounded-xl p-1 bg-slate-50"
+        />
+
+        {/* Preview Foto ringkas jika foto sudah dipilih */}
+        {previewUrl && (
+          <div className="mt-2 relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200">
+            <img src={previewUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
+          </div>
+        )}
+      </div>
       </div>
     </div>
   );
