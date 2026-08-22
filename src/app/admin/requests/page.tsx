@@ -27,6 +27,8 @@ interface StockRequest {
   proof_image_url: string | null;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   created_at: string;
+  machine_line?: string | null;
+  machine_name?: string | null;
   spare_parts: {
     name: string;
     stock: number;
@@ -127,7 +129,9 @@ export default function AdminRequestsPage() {
           type: req.type,
           quantity: req.quantity,
           stock_before: currentStock,
-          stock_after: newStock
+          stock_after: newStock,
+          machine_line: req.machine_line,
+          machine_name: req.machine_name,
         });
 
       if (logError) {

@@ -4,6 +4,25 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { X, Camera, Loader2, CheckCircle2, Pencil } from 'lucide-react';
 
+// 🟢 MASTER MESIN UNTUK KATALOG BARANG (Tanpa pembagian A/B)
+const MASTER_MACHINE_LIST = [
+  'Dumper',
+  'Blowing',
+  'Filling',
+  'Camera Inspection',
+  'Conveyor Buffer',
+  'Air Knife',
+  'Label',
+  'Dasessing',
+  'Shrink Tunnel',
+  'Camera Label Capseal',
+  'Autopacker',
+  'Ringpack',
+  'Packing Tape',
+  'Palletizer',
+  'Umum / All Machine'
+];
+
 interface SparePart {
   id: string;
   sku: string | null;
@@ -36,7 +55,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   const [aliases, setAliases] = useState('');
   const [areaLocation, setAreaLocation] = useState('');
   const [rackLocation, setRackLocation] = useState('');
-  const [machineTarget, setMachineTarget] = useState('');
+  const [machineTarget, setMachineTarget] = useState('Umum / All Machine');
   const [condition, setCondition] = useState<'BARU' | 'BEKAS'>('BARU');
   const [grade, setGrade] = useState<'ORIGINAL' | 'PABRIKASI'>('ORIGINAL');
   const [stock, setStock] = useState<number>(0);
@@ -56,7 +75,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
       setAliases(item.aliases ? item.aliases.join(', ') : '');
       setAreaLocation(item.area_location || '');
       setRackLocation(item.rack_location || '');
-      setMachineTarget(item.machine_target || '');
+      setMachineTarget(item.machine_target || 'Umum / All Machine');
       setCondition(item.condition || 'BARU');
       setGrade(item.grade || 'ORIGINAL');
       setStock(item.stock || 0);
@@ -118,7 +137,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
           aliases: parsedAliases.length > 0 ? parsedAliases : null,
           area_location: areaLocation.trim() || null,
           rack_location: rackLocation.trim() || null,
-          machine_target: machineTarget.trim() || 'Umum',
+          machine_target: machineTarget || 'Umum / All Machine',
           condition,
           grade,
           stock: Number(stock),
@@ -135,8 +154,12 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
       alert('Berhasil memperbarui data master spare part!');
       onSuccess();
       onClose();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Terjadi kesalahan saat mengupdate barang.');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setErrorMsg(err.message);
+      } else {
+        setErrorMsg('Terjadi kesalahan saat mengupdate barang.');
+      }
     } finally {
       setUploading(false);
     }
@@ -285,16 +308,22 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
               />
             </div>
 
+            {/* 🟢 DROPDOWN PERUNTUKAN MESIN */}
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Peruntukan Mesin
               </label>
-              <input
-                type="text"
+              <select
                 value={machineTarget}
                 onChange={(e) => setMachineTarget(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
+                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white"
+              >
+                {MASTER_MACHINE_LIST.map((machine) => (
+                  <option key={machine} value={machine}>
+                    {machine}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

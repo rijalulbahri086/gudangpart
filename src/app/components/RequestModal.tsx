@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Camera, Loader2, CheckCircle2 } from 'lucide-react';
+import { X, Camera, Loader2, CheckCircle2, Settings2 } from 'lucide-react';
 
 interface Item {
   id: string;
@@ -10,6 +10,32 @@ interface Item {
   unit: string;
   stock: number;
 }
+
+const REQUEST_MACHINE_UNITS = [
+  'Dumper',
+  'Blowing',
+  'Filling',
+  'Camera Inspection',
+  'Conveyor Buffer',
+  'Air Knife A',
+  'Air Knife B',
+  'Label A',
+  'Label B',
+  'Dasessing A',
+  'Dasessing B',
+  'Shrink Tunnel A Zona 1',
+  'Shrink Tunnel A Zona 2',
+  'Shrink Tunnel B Zona 1',
+  'Shrink Tunnel B Zona 2',
+  'Camera Label Capseal A',
+  'Camera Label Capseal B',
+  'Autopacker A',
+  'Autopacker B',
+  'Ringpack A',
+  'Ringpack B',
+  'Packing Tape',
+  'Palletizer'
+] as const;
 
 interface RequestModalProps {
   isOpen: boolean;
@@ -33,13 +59,19 @@ export default function RequestModal({
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [machineLine, setMachineLine] = useState<string>('Line 4');
+  const [machineName, setMachineName] = useState<string>(REQUEST_MACHINE_UNITS[0]);
 
   useEffect(() => {
     if (isOpen) {
       setQuantity(1);
       setNotes('');
       setImageFile(null);
+      setProofFile(null);
+      setPreviewUrl(null);
       setErrorMsg('');
+      setMachineLine('Line 4');
+      setMachineName(REQUEST_MACHINE_UNITS[0]);
     }
   }, [isOpen]);
 
@@ -47,12 +79,12 @@ export default function RequestModal({
 
   const isStockIn = type === 'MASUK';
 
-  const uploadImage = async (file: File): Promise<string | null > => {
+  const uploadImage = async (file: File): Promise<string | null> => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
     const filePath = `requests/${fileName}`;
 
-  const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from('sparepart-images')
       .upload(fileName, file, {
         cacheControl: '3600',
@@ -72,26 +104,26 @@ export default function RequestModal({
   };
 
   const uploadProofImage = async (file: File): Promise<string | null> => {
-  const fileExt = file.name.split('.').pop();
-  const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+    const fileExt = file.name.split('.').pop();
+    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
 
-  const { data, error } = await supabase.storage
-    .from('sparepart-images')
-    .upload(fileName, file, {
-      cacheControl: '3600',
-      upsert: false,
-    });
+    const { data, error } = await supabase.storage
+      .from('sparepart-images')
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
 
-  if (error) {
-    throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
-  }
+    if (error) {
+      throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
+    }
 
-  const { data: publicUrlData } = supabase.storage
-    .from('sparepart-images')
-    .getPublicUrl(data.path);
+    const { data: publicUrlData } = supabase.storage
+      .from('sparepart-images')
+      .getPublicUrl(data.path);
 
-  return publicUrlData.publicUrl;
-};
+    return publicUrlData.publicUrl;
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -99,12 +131,10 @@ export default function RequestModal({
     setErrorMsg('');
 
     try {
-      // 1. Ambil session user aktif
       const { data: { session } } = await supabase.auth.getSession();
       let validUserId: string | null = null;
 
       if (session?.user?.id) {
-        // Cek apakah ID dari session Auth terdaftar di tabel users
         const { data: matchedUser } = await supabase
           .from('users')
           .select('id')
@@ -116,7 +146,6 @@ export default function RequestModal({
         }
       }
 
-      // 2. Jika ID session tidak terdaftar / belum login, ambil ID user pertama dari tabel users
       if (!validUserId) {
         const { data: fallbackUser } = await supabase
           .from('users')
@@ -130,19 +159,14 @@ export default function RequestModal({
       }
 
       if (!validUserId) {
-        throw new Error('Data pemohon tidak ditemukan di tabel users. Pastikan tabel users di Supabase memiliki minimal 1 baris data!');
-      }
-
-      let proofImageUrl: string | null = null;
-
-      if (isStockIn && imageFile) {
-        proofImageUrl = await uploadImage(imageFile);
+        throw new Error('Data pemohon tidak ditemukan di tabel users.');
       }
 
       let uploadedImageUrl: string | null = null;
 
-    // Jika teknisi memilih file foto, upload terlebih dahulu
-      if (proofFile) {
+      if (isStockIn && imageFile) {
+        uploadedImageUrl = await uploadImage(imageFile);
+      } else if (proofFile) {
         uploadedImageUrl = await uploadProofImage(proofFile);
       }
 
@@ -151,20 +175,20 @@ export default function RequestModal({
         .insert([
           {
             spare_part_id: item.id,
-            requester_id:validUserId,
+            requester_id: validUserId,
             type,
             quantity: quantity,
             notes,
-            proof_image_url: uploadedImageUrl, // 👈 Memasukkan URL foto bukti ke DB
+            proof_image_url: uploadedImageUrl,
             status: 'PENDING',
+            machine_line: type === 'KELUAR' ? machineLine : null,
+            machine_name: type === 'KELUAR' ? machineName : null,
           },
         ]);
 
       if (insertError) {
         throw new Error(`Gagal mengirim request: ${insertError.message}`);
       }
-
-      
 
       alert(`Request ${isStockIn ? 'Tambah' : 'Ambil'} Stok berhasil dikirim ke Admin!`);
       onSuccess();
@@ -205,6 +229,7 @@ export default function RequestModal({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* JUMLAH */}
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
               Jumlah ({item.unit})
@@ -220,66 +245,97 @@ export default function RequestModal({
             />
           </div>
 
+          {/* 🟢 BLOK PILIHAN MESIN KHUSUS STOK KELUAR */}
+          {!isStockIn && (
+            <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
+              <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
+                <Settings2 className="w-4 h-4 text-amber-600" />
+                <span>Target Pergantian Mesin</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Pilihan Line */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Lokasi Line <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={machineLine}
+                    onChange={(e) => setMachineLine(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
+                  >
+                    <option value="Line 4">Line 4</option>
+                    <option value="Line 5">Line 5</option>
+                  </select>
+                </div>
+
+                {/* Pilihan Nama Mesin */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Unit Mesin <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={machineName}
+                    onChange={(e) => setMachineName(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate"
+                  >
+                    {REQUEST_MACHINE_UNITS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ALASAN */}
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
               Alasan {isStockIn ? 'Penambahan' : 'Pengambilan'}
             </label>
             <textarea
-              rows={3}
+              rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder={
                 isStockIn
                   ? 'Contoh: Pembongkaran mesin B, barang spare baru...'
-                  : 'Contoh: Perbaikan pompa mesin 01...'
+                  : 'Contoh: Perbaikan pergantian part mesin...'
               }
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               required
             />
           </div>
 
-          {isStockIn && (
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Foto Fisik Barang
-              </label>
+          {/* UPLOAD FOTO BUKTI */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+              Foto Bukti / Fisik Barang {isStockIn ? '(Sangat Dianjurkan)' : '(Opsional)'}
+            </label>
 
-              <div className="relative cursor-pointer rounded-xl border-2 border-dashed border-slate-200 p-4 text-center transition hover:border-blue-400 hover:bg-slate-50">
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => setImageFile(e.target.files?.[0] || null)}
-                  className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
-                />
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  setProofFile(file);
+                  setPreviewUrl(URL.createObjectURL(file));
+                }
+              }}
+              className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer border border-slate-200 rounded-xl p-1 bg-slate-50"
+            />
 
-                <div className="flex flex-col items-center gap-1 text-slate-500">
-                  {imageFile ? (
-                    <>
-                      <CheckCircle2 className="mb-1 h-6 w-6 text-emerald-500" />
-                      <span className="text-xs font-semibold text-slate-700">
-                        {imageFile.name}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        Klik untuk mengganti foto
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Camera className="mb-1 h-6 w-6 text-blue-500" />
-                      <span className="text-xs font-medium">
-                        Klik untuk Ambil Foto / Pilih File
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        Format: JPG, PNG, WEBP
-                      </span>
-                    </>
-                  )}
-                </div>
+            {previewUrl && (
+              <div className="mt-2 relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200">
+                <img src={previewUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
+          {/* TOMBOL ACTION */}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
@@ -300,32 +356,6 @@ export default function RequestModal({
             </button>
           </div>
         </form>
-        {/* 🟢 BLOK INPUT FOTO BUKTI BARU */}
-      <div>
-        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-          Foto Bukti / Fisik Barang {type === 'MASUK' ? '(Sangat Dianjurkan)' : '(Opsional)'}
-        </label>
-        
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              setProofFile(file);
-              setPreviewUrl(URL.createObjectURL(file));
-            }
-          }}
-          className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer border border-slate-200 rounded-xl p-1 bg-slate-50"
-        />
-
-        {/* Preview Foto ringkas jika foto sudah dipilih */}
-        {previewUrl && (
-          <div className="mt-2 relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200">
-            <img src={previewUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
-          </div>
-        )}
-      </div>
       </div>
     </div>
   );

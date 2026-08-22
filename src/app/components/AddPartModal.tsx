@@ -16,6 +16,24 @@ interface AddPartModalProps {
   onSuccess: () => void;
 }
 
+const MASTER_MACHINE_LIST = [
+  'Dumper',
+  'Blowing',
+  'Filling',
+  'Camera Inspection',
+  'Conveyor Buffer',
+  'Air Knife',
+  'Label',
+  'Dasessing',
+  'Shrink Tunnel',
+  'Camera Label Capseal',
+  'Autopacker',
+  'Ringpack',
+  'Packing Tape',
+  'Palletizer',
+  'Umum / All Machine'
+];
+
 export default function AddPartModal({
   isOpen,
   onClose,
@@ -28,7 +46,7 @@ export default function AddPartModal({
   const [category, setCategory] = useState('');
   const [areaLocation, setAreaLocation] = useState('');
   const [rackLocation, setRackLocation] = useState('');
-  const [machineTarget, setMachineTarget] = useState('');
+  const [machineTarget, setMachineTarget] = useState('Umum / All Machine');
 
   const [condition, setCondition] = useState<'BARU' | 'BEKAS'>('BARU');
 
@@ -56,7 +74,7 @@ export default function AddPartModal({
     setCategory('');
     setAreaLocation('');
     setRackLocation('');
-    setMachineTarget('');
+    setMachineTarget('Umum / All Machine');
     setCondition('BARU');
     setGrade('ORIGINAL');
     setStock(0);
@@ -176,7 +194,7 @@ export default function AddPartModal({
             rackLocation.trim() || null,
 
           machine_target:
-            machineTarget.trim() || 'Umum',
+            machineTarget.trim() || 'Umum / All Machine',
 
           condition,
 
@@ -460,23 +478,25 @@ export default function AddPartModal({
                   />
                 </div>
 
-                {/* MACHINE */}
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                    Peruntukan Mesin
-                  </label>
+              {/* MACHINE / PERUNTUKAN MESIN */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Peruntukan Mesin
+                </label>
 
-                  <input
-                    type="text"
-                    value={machineTarget}
-                    onChange={(e) =>
-                      setMachineTarget(e.target.value)
-                    }
-                    placeholder="Contoh: Mesin Conveyor B"
-                    disabled={uploading}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
-                  />
-                </div>
+                <select
+                  value={machineTarget}
+                  onChange={(e) => setMachineTarget(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
+                >
+                  {MASTER_MACHINE_LIST.map((machine) => (
+                    <option key={machine} value={machine}>
+                      {machine}
+                    </option>
+                  ))}
+                </select>
+              </div>
               </div>
             </div>
 
