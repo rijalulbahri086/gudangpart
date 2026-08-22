@@ -3,6 +3,10 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import RequestModal from '@/app/components/RequestModal';
+import AddUserModal from '@/app/components/AddUserModal';
+import ChatDrawer from '@/app/components/ChatDrawer';
+import { MessageSquare } from 'lucide-react';
+import { UserPlus } from 'lucide-react';
 import AddPartModal from '@/app/components/AddPartModal';
 import EditPartModal from '@/app/components/EditPartModal';
 import PartDetailModal from '@/app/components/PartDetailModal';
@@ -68,6 +72,12 @@ export default function Dashboard() {
   const [editModalOpen, setEditModalOpen] = useState<boolean>(false);
   const [editingItem, setEditingItem] = useState<SparePart | null>(null);
 
+  // state chat drawer
+  const [chatOpen, setChatOpen] = useState<boolean>(false);
+
+  //state tambah user
+  const [addUserModalOpen, setAddUserModalOpen] = useState<boolean>(false);
+
   // State Modal Detail Barang
   const [detailModalOpen, setDetailModalOpen] = useState<boolean>(false);
   const [detailItem, setDetailItem] = useState<SparePart | null>(null);
@@ -82,12 +92,27 @@ export default function Dashboard() {
         .eq('id', session.user.id)
         .maybeSingle();
 
-      if (userError) {
-        console.error('Error fetching user profile:', userError.message);
+          // 🟢 KODE BARU (Perbaikan penanganan JWT Future & Fallback User):
+    if (userError) {
+      console.error('Error fetching user profile:', userError.message);
+      
+      // Jika terjadi error JWT issued at future, beritahu dev di console
+      if (userError.message.includes('JWT issued at future')) {
+        console.warn('⚠️ Jam komputer kamu tidak sinkron dengan server Supabase. Silakan sync jam laptop kamu!');
       }
+    }
 
-      const displayName = userData?.full_name || session.user.email;
-      const userRole = userData?.role || 'TEKNISI';
+    // Mengambil display name: Utamakan full_name, jika null/error pakai metadata auth, jika tidak ada baru email
+    const displayName = 
+      userData?.full_name || 
+      session.user.user_metadata?.full_name || 
+      session.user.email;
+
+    // Mengambil role: Utamakan dari tabel database, jika error fallback ke metadata auth
+    const userRole = 
+      userData?.role || 
+      session.user.user_metadata?.role || 
+      'TEKNISI';
 
       setCurrentUser({
         id: session.user.id,
@@ -233,6 +258,15 @@ export default function Dashboard() {
           {/* TOMBOL KHUSUS ADMIN */}
           {isAdmin && (
             <>
+              {/* 1. TOMBOL TAMBAH TEKNISI / USER (WARNA HIJAU) */}
+              <button
+                onClick={() => setAddUserModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
+              >
+                <UserPlus className="w-4 h-4" /> Tambah User
+              </button>
+
+              {/* 2. TOMBOL TAMBAH MASTER BARANG (WARNA BIRU) */}
               <button
                 onClick={() => setAddModalOpen(true)}
                 className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
@@ -240,6 +274,7 @@ export default function Dashboard() {
                 <PackagePlus className="w-4 h-4" /> Tambah Barang
               </button>
 
+              {/* 3. TOMBOL APPROVAL REQUEST (WARNA AMBER) */}
               <Link
                 href="/admin/requests"
                 className="flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-3.5 py-2 rounded-lg transition shadow-sm text-sm font-semibold"
@@ -416,6 +451,22 @@ export default function Dashboard() {
                 </div>
               );
             })}
+          {/* 🟢 TOMBOL CHAT MELAYANG (DI POJOK KANAN BAWAH) */}
+          <button
+            onClick={() => setChatOpen(true)}
+            className="fixed bottom-6 right-6 z-40 bg-blue-600 hover:bg-blue-700 text-white p-3.5 rounded-full shadow-lg shadow-blue-500/30 transition flex items-center justify-center group"
+            title="Buka Chat Tim"
+          >
+            <MessageSquare className="w-6 h-6 group-hover:scale-110 transition" />
+          </button>
+
+          {/* 🟢 DRAWER CHAT INTERACTIVE */}
+          <ChatDrawer
+            isOpen={chatOpen}
+            onClose={() => setChatOpen(false)}
+            currentUser={currentUser}
+          />
+
           </div>
         )}
       </main>
@@ -442,6 +493,12 @@ export default function Dashboard() {
         onClose={() => setEditModalOpen(false)}
         item={editingItem}
         onSuccess={fetchSpareParts}
+      />
+
+      {/* 🟢 MODAL TAMBAH USER BARU (KHUSUS ADMIN) */}
+      <AddUserModal
+        isOpen={addUserModalOpen}
+        onClose={() => setAddUserModalOpen(false)}
       />
 
       {/* MODAL DETAIL BARANG */}
