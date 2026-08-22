@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Camera, Loader2, CheckCircle2, Settings2 } from 'lucide-react';
+import { X, Loader2, Settings2 } from 'lucide-react';
+import { compressImage } from '@/app/lib/imageCompressor'; // Helper kompresi gambar
 
 interface Item {
   id: string;
@@ -21,7 +22,7 @@ const REQUEST_MACHINE_UNITS = [
   'Air Knife B',
   'Label A',
   'Label B',
-  'Dasessing A',
+  'Dasessing ',
   'Dasessing B',
   'Shrink Tunnel A Zona 1',
   'Shrink Tunnel A Zona 2',
@@ -79,39 +80,16 @@ export default function RequestModal({
 
   const isStockIn = type === 'MASUK';
 
-  const uploadImage = async (file: File): Promise<string | null> => {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-    const filePath = `requests/${fileName}`;
-
-    const { error } = await supabase.storage
-      .from('sparepart-images')
-      .upload(fileName, file, {
-        cacheControl: '3600',
-        upsert: false
-      });
-
-    if (error) {
-      console.error('Error uploading image:', error.message);
-      throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
-    }
-
-    const { data: publicUrlData } = supabase.storage
-      .from('sparepart-images')
-      .getPublicUrl(filePath);
-
-    return publicUrlData.publicUrl;
-  };
-
+  // Fungsi Upload dengan Menerima File Terkompresi
   const uploadProofImage = async (file: File): Promise<string | null> => {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.webp`;
 
     const { data, error } = await supabase.storage
       .from('sparepart-images')
       .upload(fileName, file, {
         cacheControl: '3600',
         upsert: false,
+        contentType: 'image/webp'
       });
 
     if (error) {
@@ -163,13 +141,15 @@ export default function RequestModal({
       }
 
       let uploadedImageUrl: string | null = null;
+      const targetFile = proofFile || imageFile;
 
-      if (isStockIn && imageFile) {
-        uploadedImageUrl = await uploadImage(imageFile);
-      } else if (proofFile) {
-        uploadedImageUrl = await uploadProofImage(proofFile);
+      // 🟢 1. PENYIMPANAN KOMPRESI GAMBAR SEBELUM UPLOAD
+      if (targetFile) {
+        const compressed = await compressImage(targetFile, 1024, 1024, 0.75);
+        uploadedImageUrl = await uploadProofImage(compressed);
       }
 
+      // 🟢 2. PENYIMPANAN DATA DENGAN MACHINE_LINE & MACHINE_NAME DI KEDUA TIPE
       const { error: insertError } = await supabase
         .from('stock_requests')
         .insert([
@@ -181,8 +161,8 @@ export default function RequestModal({
             notes,
             proof_image_url: uploadedImageUrl,
             status: 'PENDING',
-            machine_line: type === 'KELUAR' ? machineLine : null,
-            machine_name: type === 'KELUAR' ? machineName : null,
+            machine_line: machineLine,
+            machine_name: machineName,
           },
         ]);
 
@@ -245,50 +225,48 @@ export default function RequestModal({
             />
           </div>
 
-          {/* 🟢 BLOK PILIHAN MESIN KHUSUS STOK KELUAR */}
-          {!isStockIn && (
-            <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
-              <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
-                <Settings2 className="w-4 h-4 text-amber-600" />
-                <span>Target Pergantian Mesin</span>
+          {/* 🟢 BLOK PILIHAN MESIN (TAMPIL UNTUK STOK MASUK MAUPUN KELUAR) */}
+          <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
+            <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
+              <Settings2 className="w-4 h-4 text-amber-600" />
+              <span>{isStockIn ? 'Mesin Asal Barang' : 'Target Pergantian Mesin'}</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Pilihan Line */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Lokasi Line <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={machineLine}
+                  onChange={(e) => setMachineLine(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="Line 4">Line 4</option>
+                  <option value="Line 5">Line 5</option>
+                </select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* Pilihan Line */}
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    Lokasi Line <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={machineLine}
-                    onChange={(e) => setMachineLine(e.target.value)}
-                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
-                  >
-                    <option value="Line 4">Line 4</option>
-                    <option value="Line 5">Line 5</option>
-                  </select>
-                </div>
-
-                {/* Pilihan Nama Mesin */}
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    Unit Mesin <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={machineName}
-                    onChange={(e) => setMachineName(e.target.value)}
-                    className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate"
-                  >
-                    {REQUEST_MACHINE_UNITS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Pilihan Nama Mesin */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Unit Mesin <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={machineName}
+                  onChange={(e) => setMachineName(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate"
+                >
+                  {REQUEST_MACHINE_UNITS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-          )}
+          </div>
 
           {/* ALASAN */}
           <div>
