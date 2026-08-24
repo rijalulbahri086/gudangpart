@@ -256,7 +256,7 @@ export default function Dashboard() {
         <SplashScreen finishLoading={() => setShowSplash(false)} />
       )}
 
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="min-h-screen bg-slate-50 p-4 pt-[max(2rem,env(safe-area-inset-top))] md:p-8">
         {/* HEADER UTAMA */}
         <header className="max-w-7xl mx-auto mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-center justify-between">

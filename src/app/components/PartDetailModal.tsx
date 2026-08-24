@@ -42,7 +42,7 @@ export default function PartDetailModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative my-8 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl transition-all">
+      <div className="relative mt-24 mb-auto w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl transition-all">
         {/* Tombol Close */}
         <button
           type="button"

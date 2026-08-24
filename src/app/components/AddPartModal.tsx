@@ -246,7 +246,7 @@ export default function AddPartModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !uploading) {
           handleClose();
