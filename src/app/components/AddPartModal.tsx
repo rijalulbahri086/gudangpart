@@ -6,9 +6,10 @@ import {
   X,
   Camera,
   Loader2,
-  CheckCircle2,
   PackagePlus,
+  Trash2,
 } from 'lucide-react';
+import { compressImage } from '@/app/lib/imageCompressor';
 
 interface AddPartModalProps {
   isOpen: boolean;
@@ -49,22 +50,17 @@ export default function AddPartModal({
   const [machineTarget, setMachineTarget] = useState('Umum / All Machine');
 
   const [condition, setCondition] = useState<'BARU' | 'BEKAS'>('BARU');
-
-  const [grade, setGrade] = useState<'ORIGINAL' | 'PABRIKASI'>(
-    'ORIGINAL'
-  );
+  const [grade, setGrade] = useState<'ORIGINAL' | 'PABRIKASI'>('ORIGINAL');
 
   const [stock, setStock] = useState(0);
   const [minStock, setMinStock] = useState(1);
   const [unit, setUnit] = useState('Pcs');
 
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  if (!isOpen) {
-    return null;
-  }
 
   const resetForm = () => {
     setName('');
@@ -81,22 +77,56 @@ export default function AddPartModal({
     setMinStock(1);
     setUnit('Pcs');
     setImageFile(null);
+    setPreviewUrl(null);
     setErrorMsg('');
   };
 
+
+  // Reset form saat modal dibuka/ditutup
+  useEffect(() => {
+    if (!isOpen) {
+      resetForm();
+    }
+  }, [isOpen]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+
   const handleClose = () => {
     if (uploading) return;
-
     resetForm();
     onClose();
   };
 
-  const uploadImage = async (file: File): Promise<string> => {
-    const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+  // Handler Pilih / Ambil Foto (Satu Tombol)
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
 
+    // Maksimal 10 MB (sebelum dikompresi)
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
+      return;
+    }
+
+    setErrorMsg('');
+    setImageFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
+  // Handler Hapus Foto Preview
+  const handleRemoveImage = () => {
+    setImageFile(null);
+    setPreviewUrl(null);
+  };
+
+  // Fungsi Upload Gambar yang Sudah Dikompresi
+  const uploadImage = async (file: File): Promise<string> => {
     const fileName = `master_${Date.now()}_${Math.random()
       .toString(36)
-      .substring(2, 10)}.${fileExt}`;
+      .substring(2, 10)}.jpg`;
 
     const filePath = `products/${fileName}`;
 
@@ -105,6 +135,7 @@ export default function AddPartModal({
       .upload(filePath, file, {
         cacheControl: '3600',
         upsert: false,
+        contentType: 'image/jpeg',
       });
 
     if (uploadError) {
@@ -155,19 +186,19 @@ export default function AddPartModal({
         throw new Error('Minimum stok tidak boleh kurang dari 0.');
       }
 
-      // Upload gambar jika ada
+      // 🟢 Kompresi Foto ala WhatsApp (1600px, 70%) & Upload jika ada file
       let imageUrl: string | null = null;
-
       if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
+        const compressed = await compressImage(imageFile, 1600, 0.7);
+        imageUrl = await uploadImage(compressed);
       }
 
       // Parsing alias
       const parsedAliases = aliases
         ? aliases
-            .split(',')
-            .map((item) => item.trim())
-            .filter((item) => item.length > 0)
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
         : [];
 
       // Insert ke database
@@ -175,37 +206,18 @@ export default function AddPartModal({
         .from('spare_parts')
         .insert({
           name: name.trim(),
-
           part_number: partNumber.trim() || null,
-
           sku: sku.trim() || null,
-
-          aliases:
-            parsedAliases.length > 0
-              ? parsedAliases
-              : null,
-
+          aliases: parsedAliases.length > 0 ? parsedAliases : null,
           category: category.trim() || null,
-
-          area_location:
-            areaLocation.trim() || null,
-
-          rack_location:
-            rackLocation.trim() || null,
-
-          machine_target:
-            machineTarget.trim() || 'Umum / All Machine',
-
+          area_location: areaLocation.trim() || null,
+          rack_location: rackLocation.trim() || null,
+          machine_target: machineTarget.trim() || 'Umum / All Machine',
           condition,
-
           grade,
-
           stock: finalStock,
-
           min_stock: finalMinStock,
-
           unit: unit.trim() || 'Pcs',
-
           image_url: imageUrl,
         });
 
@@ -216,24 +228,16 @@ export default function AddPartModal({
       }
 
       // Berhasil
-      alert(
-        'Berhasil menambahkan master spare part baru!'
-      );
-
+      alert('Berhasil menambahkan master spare part baru!');
       resetForm();
-
       onSuccess();
-
       onClose();
     } catch (err: unknown) {
       console.error('AddPartModal error:', err);
-
       if (err instanceof Error) {
         setErrorMsg(err.message);
       } else {
-        setErrorMsg(
-          'Terjadi kesalahan saat menambahkan barang.'
-        );
+        setErrorMsg('Terjadi kesalahan saat menambahkan barang.');
       }
     } finally {
       setUploading(false);
@@ -258,15 +262,12 @@ export default function AddPartModal({
           <div>
             <div className="flex items-center gap-2 text-blue-600">
               <PackagePlus className="h-6 w-6" />
-
               <h2 className="text-xl font-bold">
                 Tambah Master Spare Part Baru
               </h2>
             </div>
-
             <p className="mt-1 text-xs text-slate-500">
-              Masukkan informasi lengkap barang baru ke
-              dalam katalog gudang.
+              Masukkan informasi lengkap barang baru ke dalam katalog gudang.
             </p>
           </div>
 
@@ -286,91 +287,52 @@ export default function AddPartModal({
           {/* ERROR */}
           {errorMsg && (
             <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-              <div className="mt-0.5 font-bold">
-                !
-              </div>
-
+              <div className="mt-0.5 font-bold">!</div>
               <div>
-                <p className="font-semibold">
-                  Gagal menyimpan data
-                </p>
-
-                <p className="mt-0.5 text-xs">
-                  {errorMsg}
-                </p>
+                <p className="font-semibold">Gagal menyimpan data</p>
+                <p className="mt-0.5 text-xs">{errorMsg}</p>
               </div>
             </div>
           )}
 
-          <form
-            onSubmit={handleSubmit}
-            className="space-y-5"
-          >
-            {/* FOTO PRODUK */}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* 🟢 UPLOAD FOTO PRODUK (1 TOMBOL KAMERA & GALERI) */}
             <div>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Foto Produk (Opsional)
               </label>
 
-              <div className="relative cursor-pointer rounded-xl border-2 border-dashed border-slate-200 p-5 text-center transition hover:border-blue-400 hover:bg-slate-50">
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
+                <Camera className="h-5 w-5 text-blue-600" />
+                <span>{imageFile ? 'Ganti Foto Produk' : 'Ambil Foto / Pilih Galeri'}</span>
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/*"
                   disabled={uploading}
-                  onChange={(e) => {
-                    const file =
-                      e.target.files?.[0] || null;
-
-                    if (!file) {
-                      setImageFile(null);
-                      return;
-                    }
-
-                    // Maksimal 5 MB
-                    if (file.size > 5 * 1024 * 1024) {
-                      setErrorMsg(
-                        'Ukuran foto maksimal 5 MB.'
-                      );
-
-                      e.target.value = '';
-                      setImageFile(null);
-                      return;
-                    }
-
-                    setErrorMsg('');
-                    setImageFile(file);
-                  }}
-                  className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                  onChange={handleFileSelect}
+                  className="hidden"
                 />
+              </label>
 
-                <div className="flex flex-col items-center gap-1 text-slate-500">
-                  {imageFile ? (
-                    <>
-                      <CheckCircle2 className="mb-1 h-8 w-8 text-emerald-500" />
-
-                      <span className="max-w-full truncate px-4 text-xs font-semibold text-slate-700">
-                        {imageFile.name}
-                      </span>
-
-                      <span className="text-[10px] text-slate-400">
-                        Klik untuk mengganti foto produk
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Camera className="mb-1 h-8 w-8 text-blue-500" />
-
-                      <span className="text-xs font-medium">
-                        Pilih Foto Barang / Ambil Gambar
-                      </span>
-
-                      <span className="text-[10px] text-slate-400">
-                        JPG, PNG, WEBP — maksimal 5 MB
-                      </span>
-                    </>
-                  )}
+              {/* PREVIEW FOTO */}
+              {previewUrl && (
+                <div className="relative mt-3 flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
+                  <img
+                    src={previewUrl}
+                    alt="Preview Fisik Part"
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRemoveImage}
+                    disabled={uploading}
+                    className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600 disabled:opacity-50"
+                    title="Hapus Foto"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* INFORMASI UTAMA */}
@@ -383,18 +345,12 @@ export default function AddPartModal({
                 {/* NAMA */}
                 <div className="md:col-span-2">
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                    Nama Spare Part{' '}
-                    <span className="text-red-500">
-                      *
-                    </span>
+                    Nama Spare Part <span className="text-red-500">*</span>
                   </label>
-
                   <input
                     type="text"
                     value={name}
-                    onChange={(e) =>
-                      setName(e.target.value)
-                    }
+                    onChange={(e) => setName(e.target.value)}
                     placeholder="Contoh: Bearing 6204 ZZ"
                     disabled={uploading}
                     required
@@ -407,13 +363,10 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Part Number
                   </label>
-
                   <input
                     type="text"
                     value={partNumber}
-                    onChange={(e) =>
-                      setPartNumber(e.target.value)
-                    }
+                    onChange={(e) => setPartNumber(e.target.value)}
                     placeholder="Contoh: PN-6204ZZ-SKF"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
@@ -425,13 +378,10 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Kode SKU
                   </label>
-
                   <input
                     type="text"
                     value={sku}
-                    onChange={(e) =>
-                      setSku(e.target.value)
-                    }
+                    onChange={(e) => setSku(e.target.value)}
                     placeholder="Contoh: BRG-001"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
@@ -443,18 +393,14 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Kata Kunci / Alias Pencarian
                   </label>
-
                   <input
                     type="text"
                     value={aliases}
-                    onChange={(e) =>
-                      setAliases(e.target.value)
-                    }
+                    onChange={(e) => setAliases(e.target.value)}
                     placeholder="Contoh: laher, bantalan peluru, skf"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
-
                   <p className="mt-1 text-[10px] text-slate-400">
                     Pisahkan beberapa alias dengan koma.
                   </p>
@@ -465,38 +411,34 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Kategori
                   </label>
-
                   <input
                     type="text"
                     value={category}
-                    onChange={(e) =>
-                      setCategory(e.target.value)
-                    }
+                    onChange={(e) => setCategory(e.target.value)}
                     placeholder="Contoh: Bearing"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
 
-              {/* MACHINE / PERUNTUKAN MESIN */}
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Peruntukan Mesin
-                </label>
-
-                <select
-                  value={machineTarget}
-                  onChange={(e) => setMachineTarget(e.target.value)}
-                  disabled={uploading}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
-                >
-                  {MASTER_MACHINE_LIST.map((machine) => (
-                    <option key={machine} value={machine}>
-                      {machine}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                {/* MACHINE / PERUNTUKAN MESIN */}
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                    Peruntukan Mesin
+                  </label>
+                  <select
+                    value={machineTarget}
+                    onChange={(e) => setMachineTarget(e.target.value)}
+                    disabled={uploading}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
+                  >
+                    {MASTER_MACHINE_LIST.map((machine) => (
+                      <option key={machine} value={machine}>
+                        {machine}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -512,14 +454,11 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Area Gudang
                   </label>
-
                   <input
                     type="text"
                     value={areaLocation}
-                    onChange={(e) =>
-                      setAreaLocation(e.target.value)
-                    }
-                    placeholder="Contoh: Area A"
+                    onChange={(e) => setAreaLocation(e.target.value)}
+                    placeholder="Contoh: Area A / GDSP"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
@@ -530,13 +469,10 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Lokasi Rak
                   </label>
-
                   <input
                     type="text"
                     value={rackLocation}
-                    onChange={(e) =>
-                      setRackLocation(e.target.value)
-                    }
+                    onChange={(e) => setRackLocation(e.target.value)}
                     placeholder="Contoh: Rak B-02"
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
@@ -557,20 +493,13 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Stok Awal
                   </label>
-
                   <input
                     type="number"
                     min={0}
                     value={stock}
                     onChange={(e) =>
                       setStock(
-                        Math.max(
-                          0,
-                          parseInt(
-                            e.target.value,
-                            10
-                          ) || 0
-                        )
+                        Math.max(0, parseInt(e.target.value, 10) || 0)
                       )
                     }
                     disabled={uploading}
@@ -584,20 +513,13 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Min. Stok
                   </label>
-
                   <input
                     type="number"
                     min={0}
                     value={minStock}
                     onChange={(e) =>
                       setMinStock(
-                        Math.max(
-                          0,
-                          parseInt(
-                            e.target.value,
-                            10
-                          ) || 0
-                        )
+                        Math.max(0, parseInt(e.target.value, 10) || 0)
                       )
                     }
                     disabled={uploading}
@@ -611,13 +533,10 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Satuan Unit
                   </label>
-
                   <input
                     type="text"
                     value={unit}
-                    onChange={(e) =>
-                      setUnit(e.target.value)
-                    }
+                    onChange={(e) => setUnit(e.target.value)}
                     placeholder="Pcs / Box / Roll"
                     disabled={uploading}
                     required
@@ -630,26 +549,16 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Kondisi
                   </label>
-
                   <select
                     value={condition}
                     onChange={(e) =>
-                      setCondition(
-                        e.target.value as
-                          | 'BARU'
-                          | 'BEKAS'
-                      )
+                      setCondition(e.target.value as 'BARU' | 'BEKAS')
                     }
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   >
-                    <option value="BARU">
-                      BARU
-                    </option>
-
-                    <option value="BEKAS">
-                      BEKAS
-                    </option>
+                    <option value="BARU">BARU</option>
+                    <option value="BEKAS">BEKAS</option>
                   </select>
                 </div>
 
@@ -658,26 +567,16 @@ export default function AddPartModal({
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                     Grade Spare Part
                   </label>
-
                   <select
                     value={grade}
                     onChange={(e) =>
-                      setGrade(
-                        e.target.value as
-                          | 'ORIGINAL'
-                          | 'PABRIKASI'
-                      )
+                      setGrade(e.target.value as 'ORIGINAL' | 'PABRIKASI')
                     }
                     disabled={uploading}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   >
-                    <option value="ORIGINAL">
-                      ORIGINAL
-                    </option>
-
-                    <option value="PABRIKASI">
-                      PABRIKASI
-                    </option>
+                    <option value="ORIGINAL">ORIGINAL</option>
+                    <option value="PABRIKASI">PABRIKASI</option>
                   </select>
                 </div>
               </div>
@@ -702,10 +601,7 @@ export default function AddPartModal({
                 {uploading && (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 )}
-
-                {uploading
-                  ? 'Menyimpan...'
-                  : 'Simpan Barang'}
+                {uploading ? 'Menyimpan...' : 'Simpan Barang'}
               </button>
             </div>
           </form>

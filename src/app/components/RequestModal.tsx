@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Loader2, Settings2 } from 'lucide-react';
+import { X, Loader2, Settings2, Camera, Trash2 } from 'lucide-react';
 import { compressImage } from '@/app/lib/imageCompressor'; // Helper kompresi gambar
 
 interface Item {
@@ -22,7 +22,7 @@ const REQUEST_MACHINE_UNITS = [
   'Air Knife B',
   'Label A',
   'Label B',
-  'Dasessing ',
+  'Dasessing A',
   'Dasessing B',
   'Shrink Tunnel A Zona 1',
   'Shrink Tunnel A Zona 2',
@@ -55,7 +55,6 @@ export default function RequestModal({
 }: RequestModalProps) {
   const [quantity, setQuantity] = useState<number>(1);
   const [notes, setNotes] = useState<string>('');
-  const [imageFile, setImageFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [proofFile, setProofFile] = useState<File | null>(null);
@@ -67,7 +66,6 @@ export default function RequestModal({
     if (isOpen) {
       setQuantity(1);
       setNotes('');
-      setImageFile(null);
       setProofFile(null);
       setPreviewUrl(null);
       setErrorMsg('');
@@ -80,16 +78,31 @@ export default function RequestModal({
 
   const isStockIn = type === 'MASUK';
 
+  // Handler Pilih / Ambil Foto
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setProofFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  // Handler Hapus Foto Preview
+  const handleRemoveImage = () => {
+    setProofFile(null);
+    setPreviewUrl(null);
+  };
+
   // Fungsi Upload dengan Menerima File Terkompresi
   const uploadProofImage = async (file: File): Promise<string | null> => {
-    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.webp`;
+    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
 
     const { data, error } = await supabase.storage
       .from('sparepart-images')
       .upload(fileName, file, {
         cacheControl: '3600',
         upsert: false,
-        contentType: 'image/webp'
+        contentType: 'image/jpeg'
       });
 
     if (error) {
@@ -141,11 +154,10 @@ export default function RequestModal({
       }
 
       let uploadedImageUrl: string | null = null;
-      const targetFile = proofFile || imageFile;
 
-      // 🟢 1. PENYIMPANAN KOMPRESI GAMBAR SEBELUM UPLOAD
-      if (targetFile) {
-        const compressed = await compressImage(targetFile, 1024, 1024, 0.75);
+      // 🟢 1. PENYIMPANAN KOMPRESI GAMBAR SEBELUM UPLOAD (MODE WHATSAPP 1600px 70%)
+      if (proofFile) {
+        const compressed = await compressImage(proofFile, 1600, 0.7);
         uploadedImageUrl = await uploadProofImage(compressed);
       }
 
@@ -225,7 +237,7 @@ export default function RequestModal({
             />
           </div>
 
-          {/* 🟢 BLOK PILIHAN MESIN (TAMPIL UNTUK STOK MASUK MAUPUN KELUAR) */}
+          {/* 🟢 BLOK PILIHAN MESIN */}
           <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
             <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
               <Settings2 className="w-4 h-4 text-amber-600" />
@@ -287,28 +299,39 @@ export default function RequestModal({
             />
           </div>
 
-          {/* UPLOAD FOTO BUKTI */}
+          {/* 🟢 UPLOAD FOTO BUKTI (1 TOMBOL SERBAGUNA UNTUK KAMERA & GALERI) */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
               Foto Bukti / Fisik Barang {isStockIn ? '(Sangat Dianjurkan)' : '(Opsional)'}
             </label>
 
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  setProofFile(file);
-                  setPreviewUrl(URL.createObjectURL(file));
-                }
-              }}
-              className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer border border-slate-200 rounded-xl p-1 bg-slate-50"
-            />
+            <label className="flex items-center justify-center gap-2 p-3 border border-slate-200 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs cursor-pointer transition shadow-sm border-dashed hover:border-blue-500">
+              <Camera className="w-4 h-4 text-blue-600" />
+              <span>{proofFile ? 'Ganti Foto' : 'Ambil Foto / Pilih Galeri'}</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+            </label>
 
+            {/* PREVIEW FOTO */}
             {previewUrl && (
-              <div className="mt-2 relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200">
-                <img src={previewUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
+              <div className="relative mt-2 rounded-xl overflow-hidden border border-slate-200 h-36 bg-slate-900 flex items-center justify-center">
+                <img
+                  src={previewUrl}
+                  alt="Preview Bukti"
+                  className="h-full w-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemoveImage}
+                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-red-600 text-white p-1.5 rounded-lg backdrop-blur-sm transition"
+                  title="Hapus Foto"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
           </div>
