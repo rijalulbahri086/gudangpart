@@ -1,18 +1,22 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { Send, X, MessageSquare, Loader2 } from 'lucide-react';
 
+interface ChatSender {
+  id?: string;
+  full_name: string;
+  username: string;
+  role: string;
+}
+
 interface ChatMessage {
   id: number;
+  sender_id: string;
   message: string;
   created_at: string;
-  sender: {
-    full_name: string;
-    username: string;
-    role: string;
-  } | null;
+  sender: ChatSender | null;
 }
 
 interface ChatDrawerProps {
@@ -28,13 +32,14 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. Fetch Chat Messages from Database
-  const fetchMessages = async () => {
+  // 1. Fetch Seluruh Pesan Diskusi
+  const fetchMessages = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('chat_messages')
       .select(`
         id,
+        sender_id,
         message,
         created_at,
         sender:users!sender_id (full_name, username, role)
@@ -45,21 +50,41 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
       setMessages(data as unknown as ChatMessage[]);
     }
     setLoading(false);
-  };
+  }, []);
 
-  // 2. Realtime Listener
+  // 2. Realtime Subscription & Load Initial Data
   useEffect(() => {
     if (!isOpen) return;
 
     fetchMessages();
 
+    // Subscribe ke event INSERT pesan baru
     const channel = supabase
-      .channel('chat_realtime')
+      .channel('chat_realtime_room')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
-        () => {
-          fetchMessages();
+        async (payload) => {
+          // Ambil detail profil sender untuk pesan baru
+          const { data: senderData } = await supabase
+            .from('users')
+            .select('full_name, username, role')
+            .eq('id', payload.new.sender_id)
+            .single();
+
+          const newMsg: ChatMessage = {
+            id: payload.new.id,
+            sender_id: payload.new.sender_id,
+            message: payload.new.message,
+            created_at: payload.new.created_at,
+            sender: senderData || null,
+          };
+
+          setMessages((prev) => {
+            // Cegah duplikasi jika pesan dikirim oleh diri sendiri
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
         }
       )
       .subscribe();
@@ -67,32 +92,36 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [isOpen]);
+  }, [isOpen, fetchMessages]);
 
-  // 3. Auto Scroll
+  // 3. Auto Scroll ke Pesan Terbawah
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (isOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isOpen]);
 
-  // 4. Send Message Handler
+  // 4. Handler Kirim Pesan
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !currentUser) return;
 
+    const messageText = newMessage.trim();
     setSending(true);
+
     try {
       const { error } = await supabase.from('chat_messages').insert([
         {
           sender_id: currentUser.id,
-          message: newMessage.trim(),
+          message: messageText,
         },
       ]);
 
       if (error) throw error;
       setNewMessage('');
-      fetchMessages();
-    } catch (err: any) {
-      alert(`Gagal mengirim pesan: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Gagal mengirim pesan.';
+      alert(msg);
     } finally {
       setSending(false);
     }
@@ -101,7 +130,12 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
         
         {/* HEADER CHAT */}
@@ -115,16 +149,21 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
               <p className="text-xs text-slate-500">Obrolan internal Teknisi & Admin</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-slate-200 rounded-lg text-slate-500 transition">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 hover:bg-slate-200 rounded-lg text-slate-500 transition"
+            title="Tutup"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* AREA DAFTAR PESAN */}
+        {/* DAFTAR PESAN */}
         <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50/50">
           {loading && messages.length === 0 ? (
             <div className="flex items-center justify-center h-full text-slate-400 text-xs gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" /> Memuat obrolan...
+              <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> Memuat obrolan...
             </div>
           ) : messages.length === 0 ? (
             <div className="text-center py-12 text-slate-400 text-xs">
@@ -132,14 +171,13 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
             </div>
           ) : (
             messages.map((msg) => {
-              const isMe =
-                msg.sender?.full_name === currentUser?.name ||
-                msg.sender?.username === currentUser?.name;
+              // Validasi berbasis ID pengirim
+              const isMe = msg.sender_id === currentUser?.id;
 
               return (
                 <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                   <span className="text-[10px] text-slate-400 mb-1 px-1">
-                    {msg.sender?.full_name || 'Pengguna'} ({msg.sender?.role || 'USER'})
+                    {msg.sender?.full_name || 'Pengguna'} ({msg.sender?.role || 'TEKNISI'})
                   </span>
                   <div
                     className={`max-w-[80%] p-3 rounded-2xl text-xs leading-relaxed shadow-sm ${
@@ -150,8 +188,11 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
                   >
                     {msg.message}
                   </div>
-                  <span className="text-[9px] text-slate-300 mt-0.5 px-1">
-                    {new Date(msg.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                  <span className="text-[9px] text-slate-400 mt-0.5 px-1">
+                    {new Date(msg.created_at).toLocaleTimeString('id-ID', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </span>
                 </div>
               );
@@ -178,10 +219,7 @@ export default function ChatDrawer({ isOpen, onClose, currentUser }: ChatDrawerP
             {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </form>
-
       </div>
     </div>
   );
 }
-
-export { ChatDrawer };

@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Camera, Loader2, CheckCircle2, Pencil } from 'lucide-react';
+import { X, Camera, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { compressImage } from '@/app/lib/imageCompressor';
 
-// 🟢 MASTER MESIN UNTUK KATALOG BARANG (Tanpa pembagian A/B)
 const MASTER_MACHINE_LIST = [
   'Dumper',
   'Blowing',
@@ -20,7 +20,7 @@ const MASTER_MACHINE_LIST = [
   'Ringpack',
   'Packing Tape',
   'Palletizer',
-  'Umum / All Machine'
+  'Umum / All Machine',
 ];
 
 interface SparePart {
@@ -53,6 +53,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   const [partNumber, setPartNumber] = useState('');
   const [sku, setSku] = useState('');
   const [aliases, setAliases] = useState('');
+  const [category, setCategory] = useState('');
   const [areaLocation, setAreaLocation] = useState('');
   const [rackLocation, setRackLocation] = useState('');
   const [machineTarget, setMachineTarget] = useState('Umum / All Machine');
@@ -61,18 +62,29 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   const [stock, setStock] = useState<number>(0);
   const [minStock, setMinStock] = useState<number>(1);
   const [unit, setUnit] = useState('Pcs');
-  
+
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Clean-up Blob URL lokal
+  const clearPreviewUrl = useCallback(() => {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    setPreviewUrl(null);
+  }, [previewUrl]);
+
+  // Populasi data saat modal dibuka
   useEffect(() => {
     if (item && isOpen) {
       setName(item.name || '');
       setPartNumber(item.part_number || '');
       setSku(item.sku || '');
       setAliases(item.aliases ? item.aliases.join(', ') : '');
+      setCategory(item.category || '');
       setAreaLocation(item.area_location || '');
       setRackLocation(item.rack_location || '');
       setMachineTarget(item.machine_target || 'Umum / All Machine');
@@ -83,28 +95,49 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
       setUnit(item.unit || 'Pcs');
       setCurrentImageUrl(item.image_url || null);
       setImageFile(null);
+      clearPreviewUrl();
       setErrorMsg('');
     }
-  }, [item, isOpen]);
+  }, [item, isOpen, clearPreviewUrl]);
 
   if (!isOpen || !item) return null;
 
+  const handleClose = () => {
+    if (uploading) return;
+    clearPreviewUrl();
+    onClose();
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
+      return;
+    }
+
+    clearPreviewUrl();
+    setErrorMsg('');
+    setImageFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
   const uploadImage = async (file: File): Promise<string> => {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `master_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+    const fileName = `master_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
     const filePath = `products/${fileName}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from('sparepart-images')
-      .upload(filePath, file);
+    const { error: uploadError } = await supabase.storage.from('sparepart-images').upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: 'image/jpeg',
+    });
 
     if (uploadError) {
       throw new Error(`Gagal mengunggah foto produk: ${uploadError.message}`);
     }
 
-    const { data: publicUrlData } = supabase.storage
-      .from('sparepart-images')
-      .getPublicUrl(filePath);
+    const { data: publicUrlData } = supabase.storage.from('sparepart-images').getPublicUrl(filePath);
 
     return publicUrlData.publicUrl;
   };
@@ -115,17 +148,21 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     setErrorMsg('');
 
     try {
-      if (!name.trim()) {
-        throw new Error('Nama barang tidak boleh kosong!');
-      }
+      if (!name.trim()) throw new Error('Nama barang tidak boleh kosong!');
 
       let imageUrl: string | null = currentImageUrl;
+
+      // Jika ada file foto baru, lakukan kompresi & upload
       if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
+        const compressed = await compressImage(imageFile, 1600, 0.7);
+        imageUrl = await uploadImage(compressed);
       }
 
       const parsedAliases = aliases
-        ? aliases.split(',').map((item) => item.trim()).filter((item) => item.length > 0)
+        ? aliases
+            .split(',')
+            .map((i) => i.trim())
+            .filter((i) => i.length > 0)
         : [];
 
       const { error: updateError } = await supabase
@@ -135,6 +172,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
           part_number: partNumber.trim() || null,
           sku: sku.trim() || null,
           aliases: parsedAliases.length > 0 ? parsedAliases : null,
+          category: category.trim() || null,
           area_location: areaLocation.trim() || null,
           rack_location: rackLocation.trim() || null,
           machine_target: machineTarget || 'Umum / All Machine',
@@ -148,277 +186,307 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
         .eq('id', item.id);
 
       if (updateError) {
-        throw new Error(`Gagal mengupdate data barang: ${updateError.message}`);
+        throw new Error(`Gagal memperbarui data barang: ${updateError.message}`);
       }
 
       alert('Berhasil memperbarui data master spare part!');
       onSuccess();
-      onClose();
+      handleClose();
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setErrorMsg(err.message);
-      } else {
-        setErrorMsg('Terjadi kesalahan saat mengupdate barang.');
-      }
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan saat mengupdate barang.';
+      setErrorMsg(msg);
     } finally {
       setUploading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm">
-      <div className="relative my-8 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl transition-all">
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <div className="flex items-center gap-2 mb-1 text-blue-600 font-bold text-xl">
-          <Pencil className="w-6 h-6" />
-          <h2>Edit Master Spare Part</h2>
-        </div>
-        <p className="mb-6 text-xs text-slate-500">
-          Ubah informasi detail barang di katalog gudang.
-        </p>
-
-        {errorMsg && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs font-medium text-red-600">
-            {errorMsg}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* FOTO PRODUK */}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !uploading) handleClose();
+      }}
+    >
+      <div
+        className="relative flex max-h-[95vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {/* HEADER MODAL */}
+        <div className="flex items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
           <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-              Foto Produk
-            </label>
-            <div className="relative cursor-pointer rounded-xl border-2 border-dashed border-slate-200 p-4 text-center transition hover:border-blue-400 hover:bg-slate-50">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setImageFile(e.target.files?.[0] || null)}
-                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
-              />
-              <div className="flex flex-col items-center gap-1 text-slate-500">
-                {imageFile ? (
-                  <>
-                    <CheckCircle2 className="mb-1 h-6 w-6 text-emerald-500" />
-                    <span className="text-xs font-semibold text-slate-700">
-                      Foto baru terpilih: {imageFile.name}
-                    </span>
-                  </>
-                ) : currentImageUrl ? (
-                  <div className="flex items-center gap-3">
-                    <img src={currentImageUrl} alt="Preview" className="w-12 h-12 rounded-lg object-cover border border-slate-200" />
-                    <div className="text-left">
-                      <span className="text-xs font-medium text-slate-700 block">Foto Saat Ini Tersimpan</span>
-                      <span className="text-[10px] text-blue-500">Klik di sini jika ingin mengganti foto</span>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <Camera className="mb-1 h-6 w-6 text-blue-500" />
-                    <span className="text-xs font-medium">Pilih Foto Barang / Ambil Gambar</span>
-                  </>
-                )}
+            <div className="flex items-center gap-2 text-blue-600 font-bold text-lg">
+              <Pencil className="w-5 h-5" />
+              <h2>Edit Master Spare Part</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-500">Ubah informasi detail barang di katalog gudang.</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={uploading}
+            className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+            title="Tutup"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* BODY */}
+        <div className="overflow-y-auto px-6 py-5 space-y-4">
+          {errorMsg && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs font-medium text-red-600">
+              {errorMsg}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* FOTO PRODUK */}
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Foto Produk
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
+                <Camera className="h-5 w-5 text-blue-600" />
+                <span>{imageFile ? 'Ganti Foto Pilihan' : 'Ganti Foto Produk (Pilih / Ambil Foto)'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={uploading}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+              </label>
+
+              {/* TAMPILAN PREVIEW FOTO */}
+              {(previewUrl || currentImageUrl) && (
+                <div className="relative mt-3 flex h-36 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
+                  <img
+                    src={previewUrl || currentImageUrl!}
+                    alt="Preview Barang"
+                    className="h-full w-full object-cover"
+                  />
+                  {previewUrl && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImageFile(null);
+                        clearPreviewUrl();
+                      }}
+                      className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600"
+                      title="Batalkan Foto Baru"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* INFORMASI UTAMA */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Nama Spare Part <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Part Number
+                </label>
+                <input
+                  type="text"
+                  value={partNumber}
+                  onChange={(e) => setPartNumber(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Kode SKU
+                </label>
+                <input
+                  type="text"
+                  value={sku}
+                  onChange={(e) => setSku(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Kata Kunci / Alias Pencarian
+                </label>
+                <input
+                  type="text"
+                  value={aliases}
+                  onChange={(e) => setAliases(e.target.value)}
+                  placeholder="laher, bearing, roda (pisahkan dengan koma)"
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                />
               </div>
             </div>
-          </div>
 
-          {/* INFORMASI UTAMA */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Nama Spare Part <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-                required
-              />
+            {/* LOKASI & MESIN */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-100">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Area Gudang
+                </label>
+                <input
+                  type="text"
+                  value={areaLocation}
+                  onChange={(e) => setAreaLocation(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Lokasi Rak
+                </label>
+                <input
+                  type="text"
+                  value={rackLocation}
+                  onChange={(e) => setRackLocation(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Peruntukan Mesin
+                </label>
+                <select
+                  value={machineTarget}
+                  onChange={(e) => setMachineTarget(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
+                >
+                  {MASTER_MACHINE_LIST.map((machine) => (
+                    <option key={machine} value={machine}>
+                      {machine}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Part Number
-              </label>
-              <input
-                type="text"
-                value={partNumber}
-                onChange={(e) => setPartNumber(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
+            {/* SPESIFIKASI STOK & KUALITAS */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t border-slate-100">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Stok
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={stock}
+                  onChange={(e) => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Min. Stok
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={minStock}
+                  onChange={(e) => setMinStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Satuan Unit
+                </label>
+                <input
+                  type="text"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Grade
+                </label>
+                <select
+                  value={grade}
+                  onChange={(e) => setGrade(e.target.value as 'ORIGINAL' | 'PABRIKASI')}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 font-bold outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
+                >
+                  <option value="ORIGINAL">ORIGINAL</option>
+                  <option value="PABRIKASI">PABRIKASI</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Kondisi
+                </label>
+                <select
+                  value={condition}
+                  onChange={(e) => setCondition(e.target.value as 'BARU' | 'BEKAS')}
+                  disabled={uploading}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
+                >
+                  <option value="BARU">BARU</option>
+                  <option value="BEKAS">BEKAS</option>
+                </select>
+              </div>
             </div>
 
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Kode SKU
-              </label>
-              <input
-                type="text"
-                value={sku}
-                onChange={(e) => setSku(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Kata Kunci / Alias Pencarian
-              </label>
-              <input
-                type="text"
-                value={aliases}
-                onChange={(e) => setAliases(e.target.value)}
-                placeholder="laher, bearing, roda (pisahkan dengan koma)"
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
-            </div>
-          </div>
-
-          {/* LOKASI & MESIN */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-100">
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Area Gudang
-              </label>
-              <input
-                type="text"
-                value={areaLocation}
-                onChange={(e) => setAreaLocation(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Lokasi Rak
-              </label>
-              <input
-                type="text"
-                value={rackLocation}
-                onChange={(e) => setRackLocation(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-              />
-            </div>
-
-            {/* 🟢 DROPDOWN PERUNTUKAN MESIN */}
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Peruntukan Mesin
-              </label>
-              <select
-                value={machineTarget}
-                onChange={(e) => setMachineTarget(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white"
+            {/* ACTION BUTTONS */}
+            <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleClose}
+                disabled={uploading}
+                className="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
               >
-                {MASTER_MACHINE_LIST.map((machine) => (
-                  <option key={machine} value={machine}>
-                    {machine}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+                Batal
+              </button>
 
-          {/* SPESIFIKASI STOK & KUALITAS (GRADE) */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t border-slate-100">
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Stok
-              </label>
-              <input
-                type="number"
-                min={0}
-                value={stock}
-                onChange={(e) => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Min. Stok
-              </label>
-              <input
-                type="number"
-                min={0}
-                value={minStock}
-                onChange={(e) => setMinStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Satuan Unit
-              </label>
-              <input
-                type="text"
-                value={unit}
-                onChange={(e) => setUnit(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Kualitas
-              </label>
-              <select
-                value={grade}
-                onChange={(e) => setGrade(e.target.value as 'ORIGINAL' | 'PABRIKASI')}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 font-bold outline-none transition focus:border-blue-500 bg-white"
+              <button
+                type="submit"
+                disabled={uploading}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50 shadow-lg shadow-blue-500/25"
               >
-                <option value="ORIGINAL">ORIGINAL</option>
-                <option value="PABRIKASI">PABRIKASI</option>
-              </select>
+                {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {uploading ? 'Menyimpan...' : 'Simpan Perubahan'}
+              </button>
             </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                Kondisi
-              </label>
-              <select
-                value={condition}
-                onChange={(e) => setCondition(e.target.value as 'BARU' | 'BEKAS')}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white"
-              >
-                <option value="BARU">BARU</option>
-                <option value="BEKAS">BEKAS</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={uploading}
-              className="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
-            >
-              Batal
-            </button>
-
-            <button
-              type="submit"
-              disabled={uploading}
-              className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50 shadow-lg shadow-blue-500/25"
-            >
-              {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {uploading ? 'Menyimpan...' : 'Simpan Perubahan'}
-            </button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   );

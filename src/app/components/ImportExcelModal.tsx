@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import * as XLSX from 'xlsx';
 import { 
@@ -19,15 +19,43 @@ interface ImportExcelModalProps {
   onSuccess: () => void;
 }
 
+interface ParsedSparePart {
+  sku: string | null;
+  name: string;
+  unit: string;
+  rack_location: string;
+  stock: number;
+  area_location: string;
+  condition: 'BARU' | 'BEKAS';
+  grade: 'ORIGINAL' | 'PABRIKASI';
+  min_stock: number;
+  machine_target: string;
+}
+
 export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportExcelModalProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [previewData, setPreviewData] = useState<any[]>([]);
+  const [previewData, setPreviewData] = useState<ParsedSparePart[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [progressText, setProgressText] = useState<string>('');
+
+  const resetModal = useCallback(() => {
+    setFile(null);
+    setPreviewData([]);
+    setErrorMessage('');
+    setProgressText('');
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      resetModal();
+    }
+  }, [isOpen, resetModal]);
 
   if (!isOpen) return null;
 
-  // KETIKA FILE EXCEL DIPILIH / DIUNGGAH
+  // READ FILE EXCEL VIA FileReader
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMessage('');
     const selectedFile = e.target.files?.[0];
@@ -44,37 +72,48 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
         const wsname = workbook.SheetNames[0];
         const ws = workbook.Sheets[wsname];
 
-        // Convert sheet ke JSON
-        const rawJson: any[] = XLSX.utils.sheet_to_json(ws);
+        const rawJson: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws);
 
-        // Map data sesuai aturan pemetaan
-        const mappedData = rawJson.map((row) => ({
-          sku: row['KODE'] ? String(row['KODE']).trim() : null,
-          name: row['NAMA MATERIAL'] ? String(row['NAMA MATERIAL']).trim() : 'Tanpa Nama',
-          unit: row['SAT'] ? String(row['SAT']).trim() : 'PCS',
-          rack_location: row['LOKASI'] ? String(row['LOKASI']).trim() : '-',
-          stock: Number(row['AKTUAL'] ?? 0),
-          area_location: 'GDSP',
-          condition: 'BARU',
-          grade: 'ORIGINAL',
-          min_stock: 0,
-          machine_target: 'Umum / All Machine'
-        }));
+        if (rawJson.length === 0) {
+          setErrorMessage('File Excel kosong atau tidak memiliki format baris data.');
+          return;
+        }
+
+        const mappedData: ParsedSparePart[] = rawJson.map((row) => {
+          const rawSku = row['KODE'] || row['SKU'] || row['Kode'];
+          const rawName = row['NAMA MATERIAL'] || row['NAMA'] || row['Nama Material'];
+          const rawUnit = row['SAT'] || row['SATUAN'] || row['Satuan'];
+          const rawRack = row['LOKASI'] || row['RAK'] || row['Lokasi'];
+          const rawStock = row['AKTUAL'] || row['STOK'] || row['Stok'];
+
+          return {
+            sku: rawSku ? String(rawSku).trim() : null,
+            name: rawName ? String(rawName).trim() : 'Tanpa Nama',
+            unit: rawUnit ? String(rawUnit).trim() : 'Pcs',
+            rack_location: rawRack ? String(rawRack).trim() : '-',
+            stock: Number(rawStock ?? 0),
+            area_location: 'GDSP',
+            condition: 'BARU',
+            grade: 'ORIGINAL',
+            min_stock: 0,
+            machine_target: 'Umum / All Machine',
+          };
+        });
 
         setPreviewData(mappedData);
-      } catch (err) {
+      } catch (err: unknown) {
         console.error('Error parsing Excel:', err);
-        setErrorMessage('Gagal membaca file Excel. Pastikan format file .xlsx atau .xls valid.');
+        setErrorMessage('Gagal membaca file Excel. Pastikan format .xlsx atau .xls sesuai.');
       }
     };
 
     reader.readAsBinaryString(selectedFile);
   };
 
-  // EKSEKUSI UPSERT KE SUPABASE
+  // EKSEKUSI BATCH UPSERT KE SUPABASE
   const handleImportSubmit = async () => {
     if (previewData.length === 0) {
-      setErrorMessage('Tidak ada data yang dapat diimport.');
+      setErrorMessage('Tidak ada data yang dapat diimpor.');
       return;
     }
 
@@ -82,35 +121,48 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
     setErrorMessage('');
 
     try {
-      // Upsert: Memperbarui jika SKU cocok, atau menambah jika SKU baru
-      const { error } = await supabase
-        .from('spare_parts')
-        .upsert(previewData, { onConflict: 'sku' });
+      // Chunking data (per 100 baris) untuk performa stabil
+      const CHUNK_SIZE = 100;
+      const totalChunks = Math.ceil(previewData.length / CHUNK_SIZE);
 
-      if (error) {
-        throw new Error(error.message);
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = previewData.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        
+        setProgressText(`Mengimpor batch ${i + 1} dari ${totalChunks}...`);
+
+        // Lakukan Upsert
+        const { error } = await supabase
+          .from('spare_parts')
+          .upsert(chunk, { onConflict: 'sku', ignoreDuplicates: false });
+
+        if (error) throw error;
       }
 
-      alert(`Berhasil memperbarui & mengsinkronkan ${previewData.length} data spare part ke database!`);
+      alert(`Berhasil memperbarui & mengsinkronkan ${previewData.length} data spare part!`);
 
       onSuccess();
+      resetModal();
       onClose();
-      setFile(null);
-      setPreviewData([]);
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setErrorMessage(`Gagal memproses import: ${err.message}`);
-      } else {
-        setErrorMessage('Terjadi kesalahan tidak terduga saat mengunggah data.');
-      }
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan tidak terduga saat mengunggah data.';
+      setErrorMessage(`Gagal memproses impor: ${msg}`);
     } finally {
       setLoading(false);
+      setProgressText('');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm">
-      <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !loading) onClose();
+      }}
+    >
+      <div
+        className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative flex flex-col max-h-[90vh]"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {/* HEADER MODAL */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4 shrink-0">
           <div className="flex items-center gap-2">
@@ -123,8 +175,10 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+            disabled={loading}
+            className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
@@ -144,14 +198,15 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
             <input
               type="file"
               accept=".xlsx, .xls"
+              disabled={loading}
               onChange={handleFileChange}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-not-allowed"
             />
             <UploadCloud className="w-10 h-10 text-slate-400 group-hover:text-emerald-500 mx-auto mb-2 transition" />
             <p className="text-sm font-semibold text-slate-700">
-              {file ? file.name : 'Klik atau seret file Buku.xlsx ke sini'}
+              {file ? file.name : 'Klik atau seret file spreadsheet Excel ke sini'}
             </p>
-            <p className="text-xs text-slate-400 mt-1">Pilih file spreadsheet <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-700">Buku.xlsx</code></p>
+            <p className="text-xs text-slate-400 mt-1">Format kolom disarankan: <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-700">KODE, NAMA MATERIAL, SAT, LOKASI, AKTUAL</code></p>
           </div>
 
           {/* PRATINJAU DATA */}
@@ -159,8 +214,9 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Pratinjau Data ({previewData.length} Item Siap Diimport)
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Pratinjau Data ({previewData.length} Item Siap Diimpor)
                 </span>
+                {progressText && <span className="text-xs font-semibold text-emerald-600">{progressText}</span>}
               </div>
 
               <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto text-xs">
@@ -203,7 +259,8 @@ export default function ImportExcelModal({ isOpen, onClose, onSuccess }: ImportE
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-semibold transition"
+            disabled={loading}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-semibold transition disabled:opacity-50"
           >
             Batal
           </button>

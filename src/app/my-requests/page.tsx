@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -14,7 +14,8 @@ import {
   FileText, 
   Image as ImageIcon,
   Loader2,
-  Inbox
+  Inbox,
+  Settings2
 } from 'lucide-react';
 
 interface StockRequest {
@@ -25,6 +26,8 @@ interface StockRequest {
   proof_image_url: string | null;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   created_at: string;
+  machine_line: string | null;
+  machine_name: string | null;
   spare_parts: {
     id: string;
     name: string;
@@ -39,7 +42,7 @@ export default function MyRequestsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [userProfile, setUserProfile] = useState<{ full_name: string; role: string } | null>(null);
 
-  const fetchMyRequests = async () => {
+  const fetchMyRequests = useCallback(async () => {
     setLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -49,7 +52,7 @@ export default function MyRequestsPage() {
         return;
       }
 
-      // Ambil profil user yang sedang login
+      // Ambil profil user
       const { data: userData } = await supabase
         .from('users')
         .select('full_name, role')
@@ -58,7 +61,7 @@ export default function MyRequestsPage() {
 
       setUserProfile(userData || { full_name: session.user.email || 'Teknisi', role: 'TEKNISI' });
 
-      // Ambil daftar request stok milik user yang sedang login
+      // Ambil riwayat pengajuan milik user
       const { data, error } = await supabase
         .from('stock_requests')
         .select(`
@@ -69,26 +72,42 @@ export default function MyRequestsPage() {
           proof_image_url,
           status,
           created_at,
+          machine_line,
+          machine_name,
           spare_parts (id, name, unit, part_number)
         `)
         .eq('requester_id', session.user.id)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setRequests((data as unknown as StockRequest[]) || []);
-    } catch (err: any) {
-      console.error('Error fetching my requests:', err.message);
+    } catch (err: unknown) {
+      console.error('Error fetching my requests:', err instanceof Error ? err.message : err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
 
   useEffect(() => {
     fetchMyRequests();
-  }, []);
+
+    // Listener Realtime saat status pengajuan di-update oleh Admin
+    const channel = supabase
+      .channel('my_requests_updates')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'stock_requests' },
+        () => {
+          fetchMyRequests();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchMyRequests]);
 
   const getStatusBadge = (status: 'PENDING' | 'APPROVED' | 'REJECTED') => {
     switch (status) {
@@ -115,6 +134,7 @@ export default function MyRequestsPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      {/* HEADER PAGE */}
       <header className="max-w-4xl mx-auto mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <Link 
@@ -132,6 +152,7 @@ export default function MyRequestsPage() {
         </div>
 
         <button 
+          type="button"
           onClick={fetchMyRequests}
           className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium self-start sm:self-auto"
         >
@@ -139,8 +160,9 @@ export default function MyRequestsPage() {
         </button>
       </header>
 
+      {/* MAIN CONTENT */}
       <main className="max-w-4xl mx-auto">
-        {loading ? (
+        {loading && requests.length === 0 ? (
           <div className="text-center py-16 text-slate-500 flex flex-col items-center gap-2">
             <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
             <span>Memuat data pengajuan Anda...</span>
@@ -189,11 +211,18 @@ export default function MyRequestsPage() {
                     {req.spare_parts?.name || 'Barang Tidak Ditemukan'}
                   </h3>
 
-                  <div className="flex items-center gap-2 text-sm text-slate-600">
-                    <FileText className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span>
-                      Jumlah Request: <b className="text-blue-600">{req.quantity} {req.spare_parts?.unit || 'Pcs'}</b>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                    <div className="flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span>Jumlah: <b className="text-blue-600">{req.quantity} {req.spare_parts?.unit || 'Pcs'}</b></span>
+                    </div>
+
+                    {(req.machine_line || req.machine_name) && (
+                      <div className="flex items-center gap-1.5 text-slate-500">
+                        <Settings2 className="w-4 h-4 text-amber-500 shrink-0" />
+                        <span>Unit: <b>{req.machine_line || 'Line -'}</b> ({req.machine_name || 'Umum'})</span>
+                      </div>
+                    )}
                   </div>
 
                   <p className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">

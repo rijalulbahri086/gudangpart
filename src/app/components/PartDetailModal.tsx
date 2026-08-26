@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { X, MapPin, Tag, Cpu, AlertTriangle, Package, Image as ImageIcon, ShieldCheck, Layers } from 'lucide-react';
+import { useEffect } from 'react';
+import { X, MapPin, Tag, Cpu, AlertTriangle, Package, Image as ImageIcon, ShieldCheck } from 'lucide-react';
 
 interface SparePart {
   id: string;
@@ -36,18 +36,45 @@ export default function PartDetailModal({
   onOpenRequest,
   canRequest = false,
 }: PartDetailModalProps) {
+  // Lock background scroll & handle tombol ESC
+  useEffect(() => {
+    if (!isOpen) return;
+
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = 'unset';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen || !item) return null;
 
-  const isLowStock = item.stock <= item.min_stock;
+  const isLowStock = Number(item.stock) <= Number(item.min_stock);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative mt-24 mb-auto w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl transition-all">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm overflow-y-auto"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="relative my-auto w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl transition-all"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {/* Tombol Close */}
         <button
           type="button"
           onClick={onClose}
           className="absolute right-4 top-4 z-10 rounded-xl bg-slate-100 p-2 text-slate-500 transition hover:bg-slate-200 hover:text-slate-800"
+          title="Tutup Modal"
         >
           <X className="h-5 w-5" />
         </button>
@@ -67,7 +94,7 @@ export default function PartDetailModal({
             </div>
           )}
 
-          {/* Badges di atas gambar */}
+          {/* Badges Kondisi & Grade */}
           <div className="absolute top-3 left-3 flex gap-2 flex-wrap">
             <span className="bg-slate-900/80 text-white text-xs font-semibold px-2.5 py-1 rounded-lg backdrop-blur-sm">
               {item.condition}
@@ -84,7 +111,7 @@ export default function PartDetailModal({
           </div>
         </div>
 
-        {/* Info Judul & Subtitle */}
+        {/* Info Judul & Kode */}
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-slate-800 leading-tight mb-1">{item.name}</h2>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 font-mono">
@@ -94,9 +121,9 @@ export default function PartDetailModal({
           </div>
         </div>
 
-        {/* Grid Informasi Detail */}
+        {/* Grid Detail Properti */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-          {/* Lokasi Rak & Area */}
+          {/* Lokasi Penyimpanan */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 flex items-start gap-3">
             <div className="p-2 bg-blue-100 text-blue-600 rounded-lg shrink-0">
               <MapPin className="w-5 h-5" />
@@ -172,7 +199,7 @@ export default function PartDetailModal({
           </div>
         )}
 
-        {/* Tombol Aksi di Modal Detail */}
+        {/* Action Buttons */}
         <div className="flex items-center justify-between pt-4 border-t border-slate-100 gap-3">
           <button
             type="button"
@@ -185,6 +212,7 @@ export default function PartDetailModal({
           {canRequest && onOpenRequest && (
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={() => {
                   onClose();
                   onOpenRequest(item, 'MASUK');
@@ -194,6 +222,7 @@ export default function PartDetailModal({
                 + Request Tambah Stok
               </button>
               <button
+                type="button"
                 onClick={() => {
                   onClose();
                   onOpenRequest(item, 'KELUAR');

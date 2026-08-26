@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { X, Loader2, Settings2, Camera, Trash2 } from 'lucide-react';
-import { compressImage } from '@/app/lib/imageCompressor'; // Helper kompresi gambar
+import { compressImage } from '@/app/lib/imageCompressor';
 
 interface Item {
   id: string;
@@ -35,7 +35,7 @@ const REQUEST_MACHINE_UNITS = [
   'Ringpack A',
   'Ringpack B',
   'Packing Tape',
-  'Palletizer'
+  'Palletizer',
 ] as const;
 
 interface RequestModalProps {
@@ -62,47 +62,58 @@ export default function RequestModal({
   const [machineLine, setMachineLine] = useState<string>('Line 4');
   const [machineName, setMachineName] = useState<string>(REQUEST_MACHINE_UNITS[0]);
 
+  // Clean-up Blob URL
+  const clearPreviewUrl = useCallback(() => {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    setPreviewUrl(null);
+  }, [previewUrl]);
+
   useEffect(() => {
     if (isOpen) {
       setQuantity(1);
       setNotes('');
       setProofFile(null);
-      setPreviewUrl(null);
+      clearPreviewUrl();
       setErrorMsg('');
       setMachineLine('Line 4');
       setMachineName(REQUEST_MACHINE_UNITS[0]);
     }
-  }, [isOpen]);
+  }, [isOpen, clearPreviewUrl]);
 
   if (!isOpen || !item) return null;
 
   const isStockIn = type === 'MASUK';
 
-  // Handler Pilih / Ambil Foto
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
+        return;
+      }
+      clearPreviewUrl();
+      setErrorMsg('');
       setProofFile(file);
       setPreviewUrl(URL.createObjectURL(file));
     }
   };
 
-  // Handler Hapus Foto Preview
   const handleRemoveImage = () => {
     setProofFile(null);
-    setPreviewUrl(null);
+    clearPreviewUrl();
   };
 
-  // Fungsi Upload dengan Menerima File Terkompresi
   const uploadProofImage = async (file: File): Promise<string | null> => {
-    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
 
     const { data, error } = await supabase.storage
       .from('sparepart-images')
       .upload(fileName, file, {
         cacheControl: '3600',
         upsert: false,
-        contentType: 'image/jpeg'
+        contentType: 'image/jpeg',
       });
 
     if (error) {
@@ -123,54 +134,27 @@ export default function RequestModal({
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      let validUserId: string | null = null;
 
-      if (session?.user?.id) {
-        const { data: matchedUser } = await supabase
-          .from('users')
-          .select('id')
-          .eq('id', session.user.id)
-          .maybeSingle();
-
-        if (matchedUser) {
-          validUserId = matchedUser.id;
-        }
-      }
-
-      if (!validUserId) {
-        const { data: fallbackUser } = await supabase
-          .from('users')
-          .select('id')
-          .limit(1)
-          .maybeSingle();
-
-        if (fallbackUser) {
-          validUserId = fallbackUser.id;
-        }
-      }
-
-      if (!validUserId) {
-        throw new Error('Data pemohon tidak ditemukan di tabel users.');
+      if (!session?.user?.id) {
+        throw new Error('Sesi Anda telah berakhir. Silakan login kembali.');
       }
 
       let uploadedImageUrl: string | null = null;
 
-      // 🟢 1. PENYIMPANAN KOMPRESI GAMBAR SEBELUM UPLOAD (MODE WHATSAPP 1600px 70%)
       if (proofFile) {
         const compressed = await compressImage(proofFile, 1600, 0.7);
         uploadedImageUrl = await uploadProofImage(compressed);
       }
 
-      // 🟢 2. PENYIMPANAN DATA DENGAN MACHINE_LINE & MACHINE_NAME DI KEDUA TIPE
       const { error: insertError } = await supabase
         .from('stock_requests')
         .insert([
           {
             spare_part_id: item.id,
-            requester_id: validUserId,
+            requester_id: session.user.id,
             type,
-            quantity: quantity,
-            notes,
+            quantity,
+            notes: notes.trim(),
             proof_image_url: uploadedImageUrl,
             status: 'PENDING',
             machine_line: machineLine,
@@ -183,10 +167,11 @@ export default function RequestModal({
       }
 
       alert(`Request ${isStockIn ? 'Tambah' : 'Ambil'} Stok berhasil dikirim ke Admin!`);
+      clearPreviewUrl();
       onSuccess();
       onClose();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Terjadi kesalahan tidak terduga';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Terjadi kesalahan tidak terduga.';
       setErrorMsg(message);
     } finally {
       setUploading(false);
@@ -194,12 +179,27 @@ export default function RequestModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm">
-      <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl transition-all">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !uploading) {
+          clearPreviewUrl();
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="relative my-auto w-full max-w-md rounded-2xl bg-white p-6 shadow-xl transition-all"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
-          onClick={onClose}
-          className="absolute right-4 top-4 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+          onClick={() => {
+            clearPreviewUrl();
+            onClose();
+          }}
+          disabled={uploading}
+          className="absolute right-4 top-4 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
         >
           <X className="h-5 w-5" />
         </button>
@@ -232,12 +232,13 @@ export default function RequestModal({
               max={!isStockIn ? item.stock : undefined}
               value={quantity || ''}
               onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              disabled={uploading}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
               required
             />
           </div>
 
-          {/* 🟢 BLOK PILIHAN MESIN */}
+          {/* MESIN TARGET */}
           <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
             <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
               <Settings2 className="w-4 h-4 text-amber-600" />
@@ -245,7 +246,6 @@ export default function RequestModal({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {/* Pilihan Line */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
                   Lokasi Line <span className="text-red-500">*</span>
@@ -253,14 +253,14 @@ export default function RequestModal({
                 <select
                   value={machineLine}
                   onChange={(e) => setMachineLine(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
+                  disabled={uploading}
+                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
                 >
                   <option value="Line 4">Line 4</option>
                   <option value="Line 5">Line 5</option>
                 </select>
               </div>
 
-              {/* Pilihan Nama Mesin */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
                   Unit Mesin <span className="text-red-500">*</span>
@@ -268,7 +268,8 @@ export default function RequestModal({
                 <select
                   value={machineName}
                   onChange={(e) => setMachineName(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate"
+                  disabled={uploading}
+                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate disabled:bg-slate-100"
                 >
                   {REQUEST_MACHINE_UNITS.map((m) => (
                     <option key={m} value={m}>
@@ -289,17 +290,18 @@ export default function RequestModal({
               rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
+              disabled={uploading}
               placeholder={
                 isStockIn
                   ? 'Contoh: Pembongkaran mesin B, barang spare baru...'
                   : 'Contoh: Perbaikan pergantian part mesin...'
               }
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
               required
             />
           </div>
 
-          {/* 🟢 UPLOAD FOTO BUKTI (1 TOMBOL SERBAGUNA UNTUK KAMERA & GALERI) */}
+          {/* FOTO BUKTI */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
               Foto Bukti / Fisik Barang {isStockIn ? '(Sangat Dianjurkan)' : '(Opsional)'}
@@ -311,12 +313,12 @@ export default function RequestModal({
               <input
                 type="file"
                 accept="image/*"
+                disabled={uploading}
                 onChange={handleFileSelect}
                 className="hidden"
               />
             </label>
 
-            {/* PREVIEW FOTO */}
             {previewUrl && (
               <div className="relative mt-2 rounded-xl overflow-hidden border border-slate-200 h-36 bg-slate-900 flex items-center justify-center">
                 <img
@@ -327,7 +329,8 @@ export default function RequestModal({
                 <button
                   type="button"
                   onClick={handleRemoveImage}
-                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-red-600 text-white p-1.5 rounded-lg backdrop-blur-sm transition"
+                  disabled={uploading}
+                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-red-600 text-white p-1.5 rounded-lg backdrop-blur-sm transition disabled:opacity-50"
                   title="Hapus Foto"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -336,11 +339,14 @@ export default function RequestModal({
             )}
           </div>
 
-          {/* TOMBOL ACTION */}
+          {/* ACTION BUTTONS */}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                clearPreviewUrl();
+                onClose();
+              }}
               disabled={uploading}
               className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
             >

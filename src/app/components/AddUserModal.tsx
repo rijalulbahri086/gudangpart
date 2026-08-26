@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import { X, UserPlus, Loader2, User, Lock, ShieldCheck } from 'lucide-react';
 
@@ -14,33 +14,53 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
-  // 🟢 HANYA DUA ROLE: TEKNISI DAN ADMIN
   const [role, setRole] = useState<'TEKNISI' | 'ADMIN'>('TEKNISI');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const resetForm = useCallback(() => {
+    setUsername('');
+    setFullName('');
+    setPassword('');
+    setRole('TEKNISI');
+    setErrorMsg('');
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      resetForm();
+    }
+  }, [isOpen, resetForm]);
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
 
-    const cleanUsername = username.trim().toLowerCase();
-    // 🟢 OTOMATIS GENERATE EMAIL DARI USERNAME
+    // Bersihkan username dari spasi dan ubah ke huruf kecil
+    const cleanUsername = username.trim().toLowerCase().replace(/\s+/g, '');
     const autoEmail = `${cleanUsername}@gudangpart.com`;
 
     try {
-      // 1. Cek apakah username sudah digunakan
-      const { data: existingUser } = await supabase
+      if (!cleanUsername) throw new Error('Username tidak boleh kosong.');
+      if (password.length < 6) throw new Error('Password minimal 6 karakter.');
+
+      // 1. Cek ketersediaan username di tabel public.users
+      const { data: existingUser, error: checkError } = await supabase
         .from('users')
         .select('username')
         .eq('username', cleanUsername)
         .maybeSingle();
 
+      if (checkError) console.warn('Pemeriksaan username error:', checkError.message);
+
       if (existingUser) {
-        throw new Error('Username sudah digunakan! Pilih username lain.');
+        throw new Error('Username sudah digunakan! Gunakan username lain.');
       }
 
-      // 2. Registrasi ke Supabase Auth
+      // 2. Registrasi user ke Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: autoEmail,
         password: password,
@@ -56,7 +76,7 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
       if (authError) throw authError;
 
       if (authData.user) {
-        // 3. Fallback Upsert ke tabel public.users
+        // 3. Simpan data profil ke public.users
         const { error: profileError } = await supabase.from('users').upsert([
           {
             id: authData.user.id,
@@ -68,29 +88,23 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
         ]);
 
         if (profileError) {
-          console.warn('Profile upsert notice:', profileError.message);
+          console.warn('Upsert profil gagal:', profileError.message);
         }
 
-        alert(`Pengguna baru "${fullName}" (${role}) berhasil ditambahkan!\nEmail login: ${autoEmail}`);
-        
-        // Reset Form
-        setUsername('');
-        setFullName('');
-        setPassword('');
-        setRole('TEKNISI');
-        
+        alert(`Pengguna baru "${fullName}" (${role}) berhasil ditambahkan!\nEmail Login: ${autoEmail}`);
+
+        resetForm();
         if (onSuccess) onSuccess();
         onClose();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error adding user:', err);
-      setErrorMsg(err.message || 'Gagal menambahkan pengguna baru.');
+      const msg = err instanceof Error ? err.message : 'Gagal menambahkan pengguna baru.';
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }
   };
-
-  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm">
@@ -106,19 +120,24 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
               <p className="text-xs text-slate-500">Daftarkan Teknisi atau Admin baru</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600">
+          <button 
+            type="button"
+            onClick={onClose} 
+            disabled={loading}
+            className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 disabled:opacity-50"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {errorMsg && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs">
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs font-medium">
             {errorMsg}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Full Name */}
+          {/* Nama Lengkap */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Nama Lengkap</label>
             <div className="relative">
@@ -127,8 +146,9 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
                 type="text"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder="Masukan Nama Lengkap"
-                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Masukkan Nama Lengkap"
+                disabled={loading}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
                 required
               />
             </div>
@@ -141,13 +161,14 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Nama panggilan anda (tanpa spasi)"
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Username (tanpa spasi)"
+              disabled={loading}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
               required
             />
             {username.trim() && (
               <span className="text-[11px] text-slate-400 mt-1 block">
-                Email otomatis: <b className="text-slate-600">{username.trim().toLowerCase()}@gudangpart.com</b>
+                Email otomatis: <b className="text-slate-600">{username.trim().toLowerCase().replace(/\s+/g, '')}@gudangpart.com</b>
               </span>
             )}
           </div>
@@ -162,14 +183,15 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Minimal 6 karakter"
-                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={loading}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
                 minLength={6}
                 required
               />
             </div>
           </div>
 
-          {/* Role Selection (Hanya TEKNISI dan ADMIN) */}
+          {/* Role Selection */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Role / Hak Akses</label>
             <div className="grid grid-cols-2 gap-2">
@@ -177,6 +199,7 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
                 <button
                   key={r}
                   type="button"
+                  disabled={loading}
                   onClick={() => setRole(r)}
                   className={`py-2 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 ${
                     role === r
@@ -196,7 +219,8 @@ export default function AddUserModal({ isOpen, onClose, onSuccess }: AddUserModa
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-semibold text-sm transition"
+              disabled={loading}
+              className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-semibold text-sm transition disabled:opacity-50"
             >
               Batal
             </button>
