@@ -194,19 +194,44 @@ export default function MachineHistoryPage() {
     });
   }, [sparePartsList, partSearchQuery]);
 
-  // Handler Submit Form Data Pergantian
+  // Handler Submit Form Data Pergantian (Telah Diperkuat Keamanannya)
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     setManualSubmitting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
       
-      if (!session?.user?.id) {
+      if (sessionErr || !session?.user?.id) {
         throw new Error('Sesi autentikasi telah berakhir. Silakan login kembali.');
       }
 
-      const validActorId = session.user.id;
+      const authUserId = session.user.id;
+
+      // Pastikan user terdaftar di tabel publik 'users' agar foreign key tidak error
+      const { data: profileCheck } = await supabase
+        .from('users')
+        .select('id')
+        .eq('id', authUserId)
+        .maybeSingle();
+
+      if (!profileCheck) {
+        const { error: insertUserErr } = await supabase
+          .from('users')
+          .insert([
+            {
+              id: authUserId,
+              username: session.user.email?.split('@')[0] || 'teknisi',
+              full_name: session.user.user_metadata?.full_name || session.user.email || 'Teknisi Gudang',
+              role: 'TEKNISI'
+            }
+          ]);
+        
+        if (insertUserErr) {
+          console.warn('Gagal sinkronisasi profil user:', insertUserErr.message);
+        }
+      }
+
       const targetPartId = selectedPart ? selectedPart.id : null;
       const isNoPart = !targetPartId;
 
@@ -223,7 +248,7 @@ export default function MachineHistoryPage() {
         .insert([
           {
             spare_part_id: targetPartId,
-            requester_id: validActorId,
+            requester_id: authUserId,
             type: 'KELUAR',
             quantity: isNoPart ? 0 : manualQty,
             notes: manualNotes.trim() || (isNoPart ? 'Maintenance / Cleaning tanpa penggantian part' : 'Pencatatan data pergantian mesin'),
@@ -236,7 +261,7 @@ export default function MachineHistoryPage() {
         .select('id')
         .single();
 
-      if (reqErr) throw reqErr;
+      if (reqErr) throw new Error(`Gagal membuat request: ${reqErr.message}`);
 
       // 2. Insert ke stock_logs
       const { error: logErr } = await supabase
@@ -245,18 +270,31 @@ export default function MachineHistoryPage() {
           {
             request_id: reqData.id,
             spare_part_id: targetPartId,
-            actor_id: validActorId,
+            actor_id: authUserId,
             type: 'KELUAR',
             quantity: isNoPart ? 0 : manualQty,
             stock_before: currentStock,
-            stock_after: currentStock,
+            stock_after: isNoPart ? currentStock : Math.max(0, currentStock - manualQty),
             machine_line: manualLine,
             machine_name: manualMachine,
             created_at: customDate
           }
         ]);
 
-      if (logErr) throw logErr;
+      if (logErr) throw new Error(`Gagal mencatat log stok: ${logErr.message}`);
+
+      // 3. Potong stok master jika menggunakan part
+      if (!isNoPart && targetPartId) {
+        const newStock = Math.max(0, currentStock - manualQty);
+        const { error: updateStockErr } = await supabase
+          .from('spare_parts')
+          .update({ stock: newStock })
+          .eq('id', targetPartId);
+
+        if (updateStockErr) {
+          console.warn('Gagal memperbarui stok master:', updateStockErr.message);
+        }
+      }
 
       alert('Catatan pergantian mesin berhasil disimpan!');
       setIsManualModalOpen(false);
@@ -265,9 +303,11 @@ export default function MachineHistoryPage() {
       setManualNotes('');
       setManualDate('');
       fetchMachineLogs();
+      fetchSpareParts();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Terjadi kesalahan saat menyimpan data.';
       alert(msg);
+      console.error('Submit manual history error:', err);
     } finally {
       setManualSubmitting(false);
     }
@@ -291,7 +331,6 @@ export default function MachineHistoryPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* 🟢 TOMBOL INPUT HANYA MUNCUL JIKA USER SUDAH LOGIN */}
           {isLoggedIn && (
             <button 
               type="button"
@@ -423,9 +462,9 @@ export default function MachineHistoryPage() {
                             )}
                           </>
                         ) : (
-                          <div className="font-semibold text-slate-500 italic flex items-center gap-1.5 text-xs">
+                          <div className="whitespace-nowrap font-semibold text-slate-500 italic flex items-center gap-1.5 text-xs">
                             <Wrench className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                            Tanpa Part (Maintenance/Cleaning)
+                            Part tidak ada di stok
                           </div>
                         )}
                       </td>
@@ -458,7 +497,7 @@ export default function MachineHistoryPage() {
         )}
       </main>
 
-      {/* MODAL INPUT DATA PERGANTIAN (HANYA DIAKSES JIKA LOGIN) */}
+      {/* MODAL INPUT DATA PERGANTIAN */}
       {isLoggedIn && isManualModalOpen && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
@@ -538,7 +577,7 @@ export default function MachineHistoryPage() {
                     >
                       <div className="flex items-center gap-2">
                         <Wrench className="w-4 h-4 text-amber-500" />
-                        <span>-- Tanpa Part (Maintenance / Cleaning) --</span>
+                        <span>-- Part tidak ada di stok --</span>
                       </div>
                       {!selectedPart && <Check className="w-4 h-4 text-amber-600" />}
                     </div>
@@ -613,7 +652,7 @@ export default function MachineHistoryPage() {
               ) : (
                 <div className="bg-amber-50/70 border border-amber-200/60 rounded-xl p-2.5 flex items-center gap-2 text-amber-800 text-xs font-semibold">
                   <Wrench className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Mode Pekerjaan Tanpa Penggantian Spare Part</span>
+                  <span>Part tidak ada di stok</span>
                 </div>
               )}
 
