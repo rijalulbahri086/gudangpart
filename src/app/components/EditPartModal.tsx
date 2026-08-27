@@ -69,7 +69,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Clean-up Blob URL lokal
+  // Clean-up Blob URL lokal untuk mencegah memory leak
   const clearPreviewUrl = useCallback(() => {
     if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
@@ -108,8 +108,8 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     onClose();
   };
 
-  // 🟢 PERBAIKAN: Handler Pilih File & Buat Preview Instan
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handler Pilih File & Buat Preview Instan
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     if (!file) return;
 
@@ -121,16 +121,9 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     clearPreviewUrl();
     setErrorMsg('');
     
-    try {
-      // Kompresi otomatis menggunakan utility imageCompressor
-      const compressed = await compressImage(file);
-      setImageFile(compressed);
-      setPreviewUrl(URL.createObjectURL(compressed));
-    } catch (err) {
-      console.warn('Gagal mengompresi otomatis, menggunakan file asli:', err);
-      setImageFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
-    }
+    // Langsung buat preview instan begitu file dipilih
+    setImageFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
   };
 
   const uploadImage = async (file: File): Promise<string> => {
@@ -149,11 +142,16 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
     const { data: publicUrlData } = supabase.storage.from('sparepart-images').getPublicUrl(filePath);
 
+    if (!publicUrlData?.publicUrl) {
+      throw new Error('URL foto produk tidak berhasil dibuat.');
+    }
+
     return publicUrlData.publicUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (uploading) return;
     setUploading(true);
     setErrorMsg('');
 
@@ -162,9 +160,10 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
       let imageUrl: string | null = currentImageUrl;
 
-      // Jika ada file foto baru yang dipilih, upload ke storage
+      // Jika ada file foto baru yang dipilih, kompresi lalu upload ke storage
       if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
+        const compressed = await compressImage(imageFile, 1600, 0.7);
+        imageUrl = await uploadImage(compressed);
       }
 
       const parsedAliases = aliases
@@ -256,10 +255,9 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                 Foto Produk
               </label>
 
-              {/* 🟢 PERBAIKAN: Input file dibungkus/dihubungkan dengan benar agar preview muncul */}
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
                 <Camera className="h-5 w-5 text-blue-600" />
-                <span>{imageFile ? 'Foto Baru Dipilih (Klik untuk ganti)' : 'Ganti Foto Produk (Pilih / Ambil Foto)'}</span>
+                <span>{previewUrl || currentImageUrl ? 'Ganti Foto Produk' : 'Pilih / Ambil Foto'}</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -273,9 +271,9 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
               {(previewUrl || currentImageUrl) && (
                 <div className="relative mt-3 flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner">
                   <img
-                    src={previewUrl || currentImageUrl!}
+                    src={previewUrl || currentImageUrl || ''}
                     alt="Preview Barang"
-                    className="h-full w-full object-contain"
+                    className="h-full w-full object-cover"
                   />
                   <button
                     type="button"
