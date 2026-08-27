@@ -108,26 +108,35 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     onClose();
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 🟢 PERBAIKAN: Handler Pilih File & Buat Preview Instan
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     if (!file) return;
 
-    if (file.size > 15 * 1024 * 1024) {
-      setErrorMsg('Ukuran file foto terlalu besar (maksimal 15 MB).');
+    if (file.size > 20 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 20 MB).');
       return;
     }
 
     clearPreviewUrl();
     setErrorMsg('');
-    setImageFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    
+    try {
+      // Kompresi otomatis menggunakan utility imageCompressor
+      const compressed = await compressImage(file);
+      setImageFile(compressed);
+      setPreviewUrl(URL.createObjectURL(compressed));
+    } catch (err) {
+      console.warn('Gagal mengompresi otomatis, menggunakan file asli:', err);
+      setImageFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
   };
 
   const uploadImage = async (file: File): Promise<string> => {
     const fileName = `master_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
     const filePath = `products/${fileName}`;
 
-    // 🟢 Menggunakan upsert: true agar proses tulis data aman
     const { error: uploadError } = await supabase.storage.from('sparepart-images').upload(filePath, file, {
       cacheControl: '3600',
       upsert: true,
@@ -153,10 +162,9 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
       let imageUrl: string | null = currentImageUrl;
 
-      // 🟢 Jika ada file foto baru, kompresi terlebih dahulu lalu upload ke Storage
+      // Jika ada file foto baru yang dipilih, upload ke storage
       if (imageFile) {
-        const compressed = await compressImage(imageFile);
-        imageUrl = await uploadImage(compressed);
+        imageUrl = await uploadImage(imageFile);
       }
 
       const parsedAliases = aliases
@@ -248,9 +256,10 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                 Foto Produk
               </label>
 
+              {/* 🟢 PERBAIKAN: Input file dibungkus/dihubungkan dengan benar agar preview muncul */}
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
                 <Camera className="h-5 w-5 text-blue-600" />
-                <span>{imageFile ? 'Ganti Foto Pilihan' : 'Ganti Foto Produk (Pilih / Ambil Foto)'}</span>
+                <span>{imageFile ? 'Foto Baru Dipilih (Klik untuk ganti)' : 'Ganti Foto Produk (Pilih / Ambil Foto)'}</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -262,26 +271,24 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
               {/* TAMPILAN PREVIEW FOTO */}
               {(previewUrl || currentImageUrl) && (
-                <div className="relative mt-3 flex h-36 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
+                <div className="relative mt-3 flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner">
                   <img
                     src={previewUrl || currentImageUrl!}
                     alt="Preview Barang"
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                   />
-                  {(previewUrl || currentImageUrl) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setImageFile(null);
-                        clearPreviewUrl();
-                        setCurrentImageUrl(null);
-                      }}
-                      className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600"
-                      title="Hapus / Batalkan Foto"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImageFile(null);
+                      clearPreviewUrl();
+                      setCurrentImageUrl(null);
+                    }}
+                    className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600 shadow"
+                    title="Hapus / Kosongkan Foto"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               )}
             </div>
