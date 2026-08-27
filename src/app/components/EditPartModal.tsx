@@ -112,8 +112,8 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     const file = e.target.files?.[0] || null;
     if (!file) return;
 
-    if (file.size > 10 * 1024 * 1024) {
-      setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
+    if (file.size > 15 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 15 MB).');
       return;
     }
 
@@ -127,9 +127,10 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     const fileName = `master_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
     const filePath = `products/${fileName}`;
 
+    // 🟢 Menggunakan upsert: true agar proses tulis data aman
     const { error: uploadError } = await supabase.storage.from('sparepart-images').upload(filePath, file, {
       cacheControl: '3600',
-      upsert: false,
+      upsert: true,
       contentType: 'image/jpeg',
     });
 
@@ -152,9 +153,9 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
       let imageUrl: string | null = currentImageUrl;
 
-      // Jika ada file foto baru, lakukan kompresi & upload
+      // 🟢 Jika ada file foto baru, kompresi terlebih dahulu lalu upload ke Storage
       if (imageFile) {
-        const compressed = await compressImage(imageFile, 1600, 0.7);
+        const compressed = await compressImage(imageFile);
         imageUrl = await uploadImage(compressed);
       }
 
@@ -267,15 +268,16 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                     alt="Preview Barang"
                     className="h-full w-full object-cover"
                   />
-                  {previewUrl && (
+                  {(previewUrl || currentImageUrl) && (
                     <button
                       type="button"
                       onClick={() => {
                         setImageFile(null);
                         clearPreviewUrl();
+                        setCurrentImageUrl(null);
                       }}
                       className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600"
-                      title="Batalkan Foto Baru"
+                      title="Hapus / Batalkan Foto"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
