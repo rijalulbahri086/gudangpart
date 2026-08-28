@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Loader2, Package, Wrench, Search, Check, Cpu } from 'lucide-react';
+import { X, Loader2, Package, Wrench, Search, Check, Cpu, Camera, Trash2 } from 'lucide-react';
+import { compressImage } from '@/app/lib/imageCompressor';
 
 const MACHINE_OPTIONS = [
   'Dumper',
@@ -44,7 +45,7 @@ interface SparePart {
 
 interface RequestModalProps {
   isOpen: boolean;
-  item: SparePart | null; // Jika null, berarti opsi "Part tidak ada di stok"
+  item: SparePart | null;
   type: 'MASUK' | 'KELUAR';
   onClose: () => void;
   onSuccess: () => void;
@@ -60,13 +61,26 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
   const [machineLine, setMachineLine] = useState<string>('Line 4');
   const [machineName, setMachineName] = useState<string>(MACHINE_OPTIONS[0]);
 
-  // State jika user ingin mengganti part atau memilih part dari modal ini langsung
+  // State Bukti Foto & Kompresi
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [compressing, setCompressing] = useState<boolean>(false);
+
+  // State pilihan part
   const [sparePartsList, setSparePartsList] = useState<SparePart[]>([]);
   const [selectedPart, setSelectedPart] = useState<SparePart | null>(null);
   const [partSearchQuery, setPartSearchQuery] = useState<string>('');
   const [isPartDropdownOpen, setIsPartDropdownOpen] = useState<boolean>(false);
 
-  // Ambil daftar master part untuk opsi pencarian di dalam modal
+  // Bersihkan Blob URL preview untuk mencegah memory leak
+  const clearPreview = () => {
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImagePreview(null);
+    setImageFile(null);
+  };
+
   useEffect(() => {
     if (isOpen) {
       const fetchParts = async () => {
@@ -78,7 +92,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
       };
       fetchParts();
 
-      // Set initial item jika dipassing dari luar
       if (item) {
         setSelectedPart(item);
         setPartSearchQuery(item.name);
@@ -89,10 +102,40 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
       setQuantity(1);
       setNotes('');
       setErrorMsg('');
+      clearPreview();
     }
   }, [isOpen, item]);
 
-  // Filter pilihan spare part
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
+
+    if (file.size > 25 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 25 MB).');
+      return;
+    }
+
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+
+    setImagePreview(null);
+    setErrorMsg('');
+    setCompressing(true);
+
+    try {
+      const compressedFile = await compressImage(file, 1600, 0.7);
+      setImageFile(compressedFile);
+      setImagePreview(URL.createObjectURL(compressedFile));
+    } catch (err) {
+      console.warn('Gagal kompresi otomatis, menggunakan file asli:', err);
+      setImageFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    } finally {
+      setCompressing(false);
+    }
+  };
+
   const filteredPartOptions = useMemo(() => {
     const q = partSearchQuery.toLowerCase().trim();
     if (!q) return sparePartsList;
@@ -110,6 +153,8 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting || compressing) return;
+
     setSubmitting(true);
     setErrorMsg('');
 
@@ -123,7 +168,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
       const targetPartId = selectedPart ? selectedPart.id : null;
       const isNoPart = !targetPartId;
 
-      // Validasi stok jika keluar menggunakan part
       if (!isNoPart && selectedPart) {
         if (quantity <= 0) throw new Error('Jumlah pengambilan minimal 1.');
         if (quantity > selectedPart.stock) {
@@ -131,7 +175,35 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
         }
       }
 
-      // Masukkan ke stock_requests dengan status PENDING (Menunggu Approval Admin)
+      let uploadedImageUrl = null;
+      if (imageFile) {
+        const fileName = `proof_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
+        const filePath = `proofs/${fileName}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('sparepart-images')
+          .upload(filePath, imageFile, {
+            cacheControl: '3600',
+            upsert: true,
+            contentType: 'image/jpeg',
+          });
+
+        if (uploadErr) {
+          throw new Error(`Gagal mengunggah foto bukti: ${uploadErr.message}`);
+        }
+
+        const { data: publicUrlData } = supabase.storage
+          .from('sparepart-images')
+          .getPublicUrl(filePath);
+
+        uploadedImageUrl = publicUrlData.publicUrl;
+      }
+
+      let finalNotes = notes.trim() || (isNoPart ? 'Maintenance / Cleaning tanpa penggantian part' : 'Pengambilan part untuk pergantian mesin');
+      if (uploadedImageUrl) {
+        finalNotes += ` | Foto: ${uploadedImageUrl}`;
+      }
+
       const { error: reqErr } = await supabase
         .from('stock_requests')
         .insert([
@@ -140,8 +212,8 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
             requester_id: authUserId,
             type: type,
             quantity: isNoPart ? 0 : quantity,
-            notes: notes.trim() || (isNoPart ? 'Maintenance / Cleaning tanpa penggantian part' : 'Pengambilan part untuk pergantian mesin'),
-            status: 'PENDING', // 🟢 Menunggu approval admin sebelum masuk log/stok dipotong
+            notes: finalNotes,
+            status: 'PENDING',
             machine_line: machineLine,
             machine_name: machineName,
           }
@@ -164,7 +236,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
     <div
       className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !submitting) onClose();
+        if (e.target === e.currentTarget && !submitting && !compressing) onClose();
       }}
     >
       <div
@@ -178,7 +250,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
           <button
             type="button"
             onClick={onClose}
-            disabled={submitting}
+            disabled={submitting || compressing}
             className="text-slate-400 hover:text-slate-600 disabled:opacity-50 p-1 rounded-lg hover:bg-slate-100 transition"
           >
             <X className="w-5 h-5" />
@@ -192,7 +264,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* PILIH SPARE PART (SEARCHABLE) */}
           <div className="relative">
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
               Pilih Spare Part / Material
@@ -208,7 +279,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
                   setPartSearchQuery(e.target.value);
                   setIsPartDropdownOpen(true);
                 }}
-                disabled={submitting}
+                disabled={submitting || compressing}
                 className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 transition"
               />
               {selectedPart && (
@@ -225,7 +296,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
               )}
             </div>
 
-            {/* DROPDOWN PENCARIAN PART */}
             {isPartDropdownOpen && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-52 overflow-y-auto divide-y divide-slate-100">
                 <div
@@ -270,7 +340,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
             )}
           </div>
 
-          {/* INFO DETAIL PART TERPILIH */}
           {selectedPart ? (
             <div className="bg-blue-50/50 border border-blue-200/60 rounded-xl p-3 flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-white border border-blue-200 overflow-hidden shrink-0 flex items-center justify-center">
@@ -292,14 +361,13 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
             </div>
           )}
 
-          {/* PILIH LINE & MESIN */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Line Mesin</label>
               <select
                 value={machineLine}
                 onChange={(e) => setMachineLine(e.target.value)}
-                disabled={submitting}
+                disabled={submitting || compressing}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="Line 4">Line 4</option>
@@ -312,7 +380,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
               <select
                 value={machineName}
                 onChange={(e) => setMachineName(e.target.value)}
-                disabled={submitting}
+                disabled={submitting || compressing}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 truncate"
               >
                 {MACHINE_OPTIONS.map((m) => (
@@ -322,7 +390,6 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
             </div>
           </div>
 
-          {/* JUMLAH & CATATAN */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Jumlah Pengambilan</label>
@@ -332,7 +399,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
                 max={selectedPart ? selectedPart.stock : 1}
                 value={quantity}
                 onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 1)}
-                disabled={submitting || !selectedPart}
+                disabled={submitting || compressing || !selectedPart}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400 font-bold"
                 required={!!selectedPart}
               />
@@ -345,29 +412,75 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Contoh: Perbaikan sensor / Ganti bearing aus"
-                disabled={submitting}
+                disabled={submitting || compressing}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
 
-          {/* TOMBOL AKSI */}
+          {/* BUKTI FOTO (OPSIONAL) */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+              Bukti Foto Kondisi / Mesin (Opsional)
+            </label>
+            <div className="flex flex-col gap-2">
+              {!imagePreview && !compressing && (
+                <label className="border-2 border-dashed border-slate-200 hover:border-blue-500 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-slate-50 transition text-center">
+                  <Camera className="w-6 h-6 text-slate-400 mb-1" />
+                  <span className="text-xs font-medium text-slate-600">
+                    Klik untuk ambil foto / pilih file
+                  </span>
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    capture="environment"
+                    onChange={handleImageChange}
+                    disabled={submitting || compressing}
+                    className="hidden" 
+                  />
+                </label>
+              )}
+
+              {compressing && (
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <span>Memproses foto...</span>
+                </div>
+              )}
+
+              {imagePreview && !compressing && (
+                <div className="relative w-full h-32 bg-slate-900 rounded-xl overflow-hidden border border-slate-200 flex items-center justify-center">
+                  <img src={imagePreview} alt="Preview Bukti" className="h-full w-full object-contain" />
+                  <button
+                    type="button"
+                    onClick={clearPreview}
+                    disabled={submitting}
+                    className="absolute top-2 right-2 bg-red-600 hover:bg-red-700 text-white p-1 rounded-lg shadow-md transition"
+                    title="Hapus Foto"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="pt-3 flex gap-2 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              disabled={submitting}
+              disabled={submitting || compressing}
               className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition disabled:opacity-50"
             >
               Batal
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || compressing}
               className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow-md shadow-blue-500/20 disabled:opacity-50"
             >
-              {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              Kirim Request (Approval)
+              {(submitting || compressing) && <Loader2 className="w-4 h-4 animate-spin" />}
+              {submitting ? 'Mengirim...' : compressing ? 'Memproses Foto...' : 'Kirim Request (Approval)'}
             </button>
           </div>
         </form>

@@ -83,7 +83,6 @@ export default function StockLogsPage() {
   useEffect(() => {
     fetchLogs();
 
-    // Subskripsi Real-time untuk memperbarui audit log saat ada data baru
     const channel = supabase
       .channel('stock_logs_realtime')
       .on(
@@ -100,7 +99,6 @@ export default function StockLogsPage() {
     };
   }, [fetchLogs]);
 
-  // Filter Log berdasarkan Search Query & Tipe
   const filteredLogs = logs.filter((log) => {
     const q = searchQuery.toLowerCase().trim();
     const matchPartName = log.spare_parts?.name?.toLowerCase().includes(q) || false;
@@ -257,11 +255,15 @@ export default function StockLogsPage() {
                           </span>
                         </td>
 
-                        {/* Nama Barang */}
+                        {/* Nama Barang (Diperbaiki untuk data manual / luar stok) */}
                         <td className="py-3.5 px-4">
                           <div className="font-bold text-slate-800 flex items-center gap-2">
                             <Package className="w-4 h-4 text-blue-500 shrink-0" />
-                            {log.spare_parts?.name || 'Barang Dihapus'}
+                            {log.spare_parts?.name || (
+                              log.stock_requests?.notes 
+                                ? log.stock_requests.notes.split('|')[0].trim() 
+                                : 'Barang Manual'
+                            )}
                           </div>
                           {log.spare_parts?.part_number && (
                             <span className="text-[10px] font-mono text-slate-400 block ml-6">
@@ -292,11 +294,19 @@ export default function StockLogsPage() {
                           </div>
                         </td>
 
-                        {/* Alasan */}
+                        {/* Alasan Request (Diperbaiki untuk memisahkan teks manual) */}
                         <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs">
                           <div className="flex items-start gap-1">
                             <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                            <span className="italic">{log.stock_requests?.notes || 'Tanpa catatan.'}</span>
+                            <span className="italic">
+                              {log.spare_parts ? (
+                                log.stock_requests?.notes || 'Tanpa catatan.'
+                              ) : (
+                                log.stock_requests?.notes?.includes('|') 
+                                  ? log.stock_requests.notes.split('|')[1].trim() 
+                                  : '-'
+                              )}
+                            </span>
                           </div>
                         </td>
                       </tr>
