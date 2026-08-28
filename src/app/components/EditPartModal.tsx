@@ -67,17 +67,13 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [compressing, setCompressing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Clean-up Blob URL lokal untuk mencegah memory leak
   const clearPreviewUrl = useCallback(() => {
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
-    }
     setPreviewUrl(null);
-  }, [previewUrl]);
+  }, []);
 
-  // Populasi data saat modal dibuka
   useEffect(() => {
     if (item && isOpen) {
       setName(item.name || '');
@@ -103,27 +99,39 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
   if (!isOpen || !item) return null;
 
   const handleClose = () => {
-    if (uploading) return;
+    if (uploading || compressing) return;
     clearPreviewUrl();
     onClose();
   };
 
-  // Handler Pilih File & Buat Preview Instan
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
+  // 🟢 PILIH FILE, KOMPRESI OTOMATIS, DAN BUAT PREVIEW BESAR
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 20 * 1024 * 1024) {
-      setErrorMsg('Ukuran file foto terlalu besar (maksimal 20 MB).');
+    if (file.size > 25 * 1024 * 1024) {
+      setErrorMsg('Ukuran file terlalu besar (maksimal 25 MB).');
       return;
     }
 
-    clearPreviewUrl();
     setErrorMsg('');
-    
-    // Langsung buat preview instan begitu file dipilih
-    setImageFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    setCompressing(true);
+
+    try {
+      // 1. Kompresi gambar menggunakan fungsi compressImage dari proyek
+      const compressedFile = await compressImage(file);
+      setImageFile(compressedFile);
+
+      // 2. Buat URL preview dari file hasil kompresi agar tampil besar
+      const blobUrl = URL.createObjectURL(compressedFile);
+      setPreviewUrl(blobUrl);
+    } catch (err) {
+      console.warn('Gagal kompresi, menggunakan file asli:', err);
+      setImageFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    } finally {
+      setCompressing(false);
+    }
   };
 
   const uploadImage = async (file: File): Promise<string> => {
@@ -133,25 +141,19 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     const { error: uploadError } = await supabase.storage.from('sparepart-images').upload(filePath, file, {
       cacheControl: '3600',
       upsert: true,
-      contentType: 'image/jpeg',
+      contentType: file.type || 'image/jpeg',
     });
 
     if (uploadError) {
-      throw new Error(`Gagal mengunggah foto produk: ${uploadError.message}`);
+      throw new Error(`Gagal mengunggah foto: ${uploadError.message}`);
     }
 
     const { data: publicUrlData } = supabase.storage.from('sparepart-images').getPublicUrl(filePath);
-
-    if (!publicUrlData?.publicUrl) {
-      throw new Error('URL foto produk tidak berhasil dibuat.');
-    }
-
     return publicUrlData.publicUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (uploading) return;
     setUploading(true);
     setErrorMsg('');
 
@@ -160,10 +162,8 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
       let imageUrl: string | null = currentImageUrl;
 
-      // Jika ada file foto baru yang dipilih, kompresi lalu upload ke storage
       if (imageFile) {
-        const compressed = await compressImage(imageFile, 1600, 0.7);
-        imageUrl = await uploadImage(compressed);
+        imageUrl = await uploadImage(imageFile);
       }
 
       const parsedAliases = aliases
@@ -194,7 +194,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
         .eq('id', item.id);
 
       if (updateError) {
-        throw new Error(`Gagal memperbarui data barang: ${updateError.message}`);
+        throw new Error(`Gagal memperbarui data: ${updateError.message}`);
       }
 
       alert('Berhasil memperbarui data master spare part!');
@@ -212,35 +212,28 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !uploading) handleClose();
+        if (e.target === e.currentTarget && !uploading && !compressing) handleClose();
       }}
     >
       <div
         className="relative flex max-h-[95vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* HEADER MODAL */}
         <div className="flex items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
-          <div>
-            <div className="flex items-center gap-2 text-blue-600 font-bold text-lg">
-              <Pencil className="w-5 h-5" />
-              <h2>Edit Master Spare Part</h2>
-            </div>
-            <p className="mt-0.5 text-xs text-slate-500">Ubah informasi detail barang di katalog gudang.</p>
+          <div className="flex items-center gap-2 text-blue-600 font-bold text-lg">
+            <Pencil className="w-5 h-5" />
+            <h2>Edit Master Spare Part</h2>
           </div>
-
           <button
             type="button"
             onClick={handleClose}
-            disabled={uploading}
+            disabled={uploading || compressing}
             className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-            title="Tutup"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* BODY */}
         <div className="overflow-y-auto px-6 py-5 space-y-4">
           {errorMsg && (
             <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs font-medium text-red-600">
@@ -249,49 +242,68 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* FOTO PRODUK */}
+            {/* 🟢 FOTO PRODUK & PREVIEW BESAR */}
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Foto Produk
               </label>
 
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
-                <Camera className="h-5 w-5 text-blue-600" />
-                <span>{previewUrl || currentImageUrl ? 'Ganti Foto Produk' : 'Pilih / Ambil Foto'}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  disabled={uploading}
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-              </label>
+              <div className="space-y-2">
+                {/* Kotak Preview Diperbesar (Lebar Penuh, Tinggi 48) */}
+                <div className="relative h-48 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-900 flex items-center justify-center shadow-inner">
+                  {(previewUrl || currentImageUrl) ? (
+                    <img
+                      src={previewUrl || currentImageUrl!}
+                      alt="Preview Produk"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-1 text-slate-400 text-xs">
+                      <Camera className="h-8 w-8" />
+                      <span>Belum ada foto</span>
+                    </div>
+                  )}
 
-              {/* TAMPILAN PREVIEW FOTO */}
-              {(previewUrl || currentImageUrl) && (
-                <div className="relative mt-3 flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900 shadow-inner">
-                  <img
-                    src={previewUrl || currentImageUrl || ''}
-                    alt="Preview Barang"
-                    className="h-full w-full object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setImageFile(null);
-                      clearPreviewUrl();
-                      setCurrentImageUrl(null);
-                    }}
-                    className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600 shadow"
-                    title="Hapus / Kosongkan Foto"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {compressing && (
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-white text-xs gap-2">
+                      <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+                      <span>Mengompresi foto...</span>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* Tombol Aksi Foto */}
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex-1 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100">
+                    <Camera className="h-4 w-4 text-blue-600" />
+                    <span>{compressing ? 'Memproses...' : 'Pilih / Ambil Foto Baru'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={uploading || compressing}
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                  </label>
+
+                  {(previewUrl || currentImageUrl) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImageFile(null);
+                        clearPreviewUrl();
+                        setCurrentImageUrl(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-600 transition hover:bg-red-100"
+                    >
+                      <Trash2 className="h-4 w-4" /> Hapus Foto
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* INFORMASI UTAMA */}
+            {/* FORM INPUT TEKS */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
@@ -301,7 +313,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                   required
                 />
@@ -315,7 +327,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   type="text"
                   value={partNumber}
                   onChange={(e) => setPartNumber(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                 />
               </div>
@@ -328,7 +340,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   type="text"
                   value={sku}
                   onChange={(e) => setSku(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                 />
               </div>
@@ -342,7 +354,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   value={aliases}
                   onChange={(e) => setAliases(e.target.value)}
                   placeholder="laher, bearing, roda (pisahkan dengan koma)"
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                 />
               </div>
@@ -358,7 +370,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   type="text"
                   value={areaLocation}
                   onChange={(e) => setAreaLocation(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                 />
               </div>
@@ -371,7 +383,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                   type="text"
                   value={rackLocation}
                   onChange={(e) => setRackLocation(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                 />
               </div>
@@ -383,7 +395,7 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
                 <select
                   value={machineTarget}
                   onChange={(e) => setMachineTarget(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
                 >
                   {MASTER_MACHINE_LIST.map((machine) => (
@@ -395,60 +407,52 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
               </div>
             </div>
 
-            {/* SPESIFIKASI STOK & KUALITAS */}
+            {/* STOK & KONDISI */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t border-slate-100">
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Stok
-                </label>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">Stok</label>
                 <input
                   type="number"
                   min={0}
                   value={stock}
                   onChange={(e) => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                   required
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Min. Stok
-                </label>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">Min. Stok</label>
                 <input
                   type="number"
                   min={0}
                   value={minStock}
                   onChange={(e) => setMinStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                   required
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Satuan Unit
-                </label>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">Satuan</label>
                 <input
                   type="text"
                   value={unit}
                   onChange={(e) => setUnit(e.target.value)}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 disabled:bg-slate-100"
                   required
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Grade
-                </label>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">Grade</label>
                 <select
                   value={grade}
                   onChange={(e) => setGrade(e.target.value as 'ORIGINAL' | 'PABRIKASI')}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 font-bold outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
                 >
                   <option value="ORIGINAL">ORIGINAL</option>
@@ -457,13 +461,11 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Kondisi
-                </label>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">Kondisi</label>
                 <select
                   value={condition}
                   onChange={(e) => setCondition(e.target.value as 'BARU' | 'BEKAS')}
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 bg-white disabled:bg-slate-100"
                 >
                   <option value="BARU">BARU</option>
@@ -472,12 +474,12 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
               </div>
             </div>
 
-            {/* ACTION BUTTONS */}
+            {/* TOMBOL AKSI */}
             <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
               <button
                 type="button"
                 onClick={handleClose}
-                disabled={uploading}
+                disabled={uploading || compressing}
                 className="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
               >
                 Batal
@@ -485,8 +487,8 @@ export default function EditPartModal({ isOpen, onClose, item, onSuccess }: Edit
 
               <button
                 type="submit"
-                disabled={uploading}
-                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50 shadow-lg shadow-blue-500/25"
+                disabled={uploading || compressing}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 shadow-lg shadow-blue-500/25"
               >
                 {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {uploading ? 'Menyimpan...' : 'Simpan Perubahan'}

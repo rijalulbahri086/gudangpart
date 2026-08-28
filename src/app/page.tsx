@@ -26,7 +26,8 @@ import {
   List,
   RefreshCw,
   PackagePlus,
-  LogIn
+  LogIn,
+  Trash2
 } from 'lucide-react';
 
 // Import Komponen Modal & Drawer (Default Import)
@@ -160,6 +161,47 @@ export default function DashboardPage() {
     router.push('/login');
   };
 
+  // 3. Fungsi Hapus Barang (Khusus Admin)
+  const handleDeletePart = async (id: string, imageUrl: string | null, name: string) => {
+    if (currentUser?.role !== 'ADMIN') {
+      alert('Akses ditolak! Hanya Admin yang dapat menghapus barang.');
+      return;
+    }
+
+    const confirmDelete = window.confirm(`Apakah Anda yakin ingin menghapus "${name}" dari master data? Tindakan ini tidak dapat dibatalkan.`);
+    if (!confirmDelete) return;
+
+    try {
+      // Hapus file fisik di storage jika ada
+      if (imageUrl) {
+        try {
+          const urlObj = new URL(imageUrl);
+          const pathParts = urlObj.pathname.split('/sparepart-images/');
+          if (pathParts.length > 1) {
+            const filePath = pathParts[1];
+            await supabase.storage.from('sparepart-images').remove([filePath]);
+          }
+        } catch (imgErr) {
+          console.warn('Gagal menghapus file gambar fisik, melanjutkan penghapusan data database:', imgErr);
+        }
+      }
+
+      // Hapus data baris di tabel database
+      const { error } = await supabase
+        .from('spare_parts')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      alert('Barang berhasil dihapus dari sistem.');
+      fetchSpareParts();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan.';
+      alert(`Gagal menghapus barang: ${msg}`);
+    }
+  };
+
   // Filter Data
   const filteredItems = items.filter((item) => {
     const q = searchQuery.toLowerCase().trim();
@@ -201,7 +243,6 @@ export default function DashboardPage() {
 
             {/* NAVIGASI DESKTOP */}
             <div className="hidden md:flex items-center gap-2">
-              {/* Menu Publik: Hanya Muncul Jika Login */}
               {isLoggedIn && (
                 <>
                   <button
@@ -221,7 +262,6 @@ export default function DashboardPage() {
                 </>
               )}
 
-              {/* Menu Publik: Bisa diakses siapa saja (Guest Mode) */}
               <Link
                 href="/machine-history"
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition"
@@ -236,7 +276,6 @@ export default function DashboardPage() {
                 <History className="w-4 h-4 text-indigo-600" /> Audit Log
               </Link>
 
-              {/* Menu Admin Khusus */}
               {isAdmin && (
                 <>
                   <button
@@ -291,7 +330,6 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => setIsChatOpen(true)}
                   className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition"
-                  title="Diskusi Tim"
                 >
                   <MessageSquare className="w-5 h-5 text-blue-600" />
                 </button>
@@ -310,7 +348,7 @@ export default function DashboardPage() {
 
         {/* DROPDOWN HAMBURGER MENU MOBILE */}
         {isMobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-100 bg-white px-4 pt-2 pb-4 space-y-1 shadow-xl animate-in slide-in-from-top duration-200">
+          <div className="md:hidden border-t border-slate-100 bg-white px-4 pt-2 pb-4 space-y-1 shadow-xl">
             {isAdmin && (
               <>
                 <button
@@ -591,7 +629,6 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    {/* 🟢 AKSI BUTTON: HANYA MUNCUL TOMBOL AMBIL JIKA USER LOGIN */}
                     <div className={`grid ${isLoggedIn ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
                       <button
                         type="button"
@@ -613,13 +650,23 @@ export default function DashboardPage() {
                     </div>
 
                     {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedEditItem(item)}
-                        className="w-full py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-[11px] font-semibold transition"
-                      >
-                        Edit Master Barang
-                      </button>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedEditItem(item)}
+                          className="flex-1 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-[11px] font-semibold transition"
+                        >
+                          Edit Master
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePart(item.id, item.image_url, item.name)}
+                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-[11px] font-semibold transition flex items-center justify-center"
+                          title="Hapus Barang"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -697,6 +744,7 @@ export default function DashboardPage() {
                             >
                               <Eye className="w-3.5 h-3.5" />
                             </button>
+                            
                             {isLoggedIn && (
                               <button
                                 type="button"
@@ -704,6 +752,17 @@ export default function DashboardPage() {
                                 className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
                               >
                                 <Plus className="w-3.5 h-3.5" /> Ambil
+                              </button>
+                            )}
+
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePart(item.id, item.image_url, item.name)}
+                                className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-semibold transition"
+                                title="Hapus Barang"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </div>
