@@ -418,7 +418,7 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
             </div>
           </div>
 
-          {/* BUKTI FOTO (OPSIONAL) */}
+          {/* BUKTI FOTO (OPSIONAL) DENGAN PILIHAN BEBAS (KAMERA / GALERI) */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
               Bukti Foto Kondisi / Mesin (Opsional)
@@ -428,12 +428,11 @@ export default function RequestModal({ isOpen, item, type, onClose, onSuccess }:
                 <label className="border-2 border-dashed border-slate-200 hover:border-blue-500 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-slate-50 transition text-center">
                   <Camera className="w-6 h-6 text-slate-400 mb-1" />
                   <span className="text-xs font-medium text-slate-600">
-                    Klik untuk ambil foto / pilih file
+                    Ambil Foto atau Pilih dari Galeri
                   </span>
                   <input 
                     type="file" 
                     accept="image/*" 
-                    capture="environment"
                     onChange={handleImageChange}
                     disabled={submitting || compressing}
                     className="hidden" 
