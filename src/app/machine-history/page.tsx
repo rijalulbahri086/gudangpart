@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/app/lib/supabase';
 import Link from 'next/link';
 import { 
@@ -9,15 +9,12 @@ import {
   Search, 
   Calendar, 
   User, 
-  Package, 
+  Wrench, 
   PlusCircle, 
   RefreshCw, 
   Loader2, 
   X,
-  FileText,
-  Wrench,
-  Check,
-  Cpu
+  FileText
 } from 'lucide-react';
 
 const MACHINE_OPTIONS = [
@@ -66,18 +63,6 @@ interface MachineLog {
   } | null;
 }
 
-interface SparePartOption {
-  id: string;
-  name: string;
-  unit: string;
-  part_number: string | null;
-  sku: string | null;
-  aliases: string[] | null;
-  stock: number;
-  machine_target: string | null;
-  image_url: string | null;
-}
-
 export default function MachineHistoryPage() {
   const [logs, setLogs] = useState<MachineLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -87,18 +72,11 @@ export default function MachineHistoryPage() {
   const [selectedLineFilter, setSelectedLineFilter] = useState<string>('ALL');
   const [selectedMachineFilter, setSelectedMachineFilter] = useState<string>('ALL');
 
-  // Modal State & Data Part List
+  // Modal State & Input Manual Form
   const [isManualModalOpen, setIsManualModalOpen] = useState<boolean>(false);
-  const [sparePartsList, setSparePartsList] = useState<SparePartOption[]>([]);
-  
-  // State untuk Custom Searchable Select di Modal
-  const [partSearchQuery, setPartSearchQuery] = useState<string>('');
-  const [isPartDropdownOpen, setIsPartDropdownOpen] = useState<boolean>(false);
-  const [selectedPart, setSelectedPart] = useState<SparePartOption | null>(null);
-
-  // Form Field Data Manual
   const [manualLine, setManualLine] = useState<string>('Line 4');
   const [manualMachine, setManualMachine] = useState<string>(MACHINE_OPTIONS[0]);
+  const [manualPartName, setManualPartName] = useState<string>(''); 
   const [manualQty, setManualQty] = useState<number>(1);
   const [manualDate, setManualDate] = useState<string>('');
   const [manualNotes, setManualNotes] = useState<string>('');
@@ -137,22 +115,10 @@ export default function MachineHistoryPage() {
     }
   }, []);
 
-  const fetchSpareParts = useCallback(async () => {
-    const { data } = await supabase
-      .from('spare_parts')
-      .select('id, name, unit, part_number, sku, aliases, stock, machine_target, image_url')
-      .order('name', { ascending: true });
-
-    if (data) {
-      setSparePartsList(data as SparePartOption[]);
-    }
-  }, []);
-
   useEffect(() => {
     checkSession();
     fetchMachineLogs();
-    fetchSpareParts();
-  }, [checkSession, fetchMachineLogs, fetchSpareParts]);
+  }, [checkSession, fetchMachineLogs]);
 
   useEffect(() => {
     if (isManualModalOpen) {
@@ -179,24 +145,13 @@ export default function MachineHistoryPage() {
     return matchSearch && matchLine && matchMachine;
   });
 
-  // Filter Pilihan Spare Part di Modal berdasarkan Nama, PN, SKU, & Alias
-  const filteredPartOptions = useMemo(() => {
-    const q = partSearchQuery.toLowerCase().trim();
-    if (!q) return sparePartsList;
-
-    return sparePartsList.filter((item) => {
-      const matchName = item.name.toLowerCase().includes(q);
-      const matchPN = item.part_number?.toLowerCase().includes(q) || false;
-      const matchSKU = item.sku?.toLowerCase().includes(q) || false;
-      const matchAliases = item.aliases?.some((alias) => alias.toLowerCase().includes(q)) || false;
-
-      return matchName || matchPN || matchSKU || matchAliases;
-    });
-  }, [sparePartsList, partSearchQuery]);
-
-  // Handler Submit Form Data Pergantian (Telah Diperkuat Keamanannya)
+  // Handler Submit Input Data Pergantian Manual dengan pemisah ` | `
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!manualPartName.trim()) {
+      alert('Nama part atau keterangan barang wajib diisi!');
+      return;
+    }
 
     setManualSubmitting(true);
     try {
@@ -208,7 +163,6 @@ export default function MachineHistoryPage() {
 
       const authUserId = session.user.id;
 
-      // Pastikan user terdaftar di tabel publik 'users' agar foreign key tidak error
       const { data: profileCheck } = await supabase
         .from('users')
         .select('id')
@@ -216,7 +170,7 @@ export default function MachineHistoryPage() {
         .maybeSingle();
 
       if (!profileCheck) {
-        const { error: insertUserErr } = await supabase
+        await supabase
           .from('users')
           .insert([
             {
@@ -226,32 +180,24 @@ export default function MachineHistoryPage() {
               role: 'TEKNISI'
             }
           ]);
-        
-        if (insertUserErr) {
-          console.warn('Gagal sinkronisasi profil user:', insertUserErr.message);
-        }
-      }
-
-      const targetPartId = selectedPart ? selectedPart.id : null;
-      const isNoPart = !targetPartId;
-
-      let currentStock = 0;
-      if (selectedPart) {
-        currentStock = selectedPart.stock || 0;
       }
 
       const customDate = manualDate ? new Date(manualDate).toISOString() : new Date().toISOString();
+      
+      // Format pemisah: "Nama Part | Keterangan Tambahan"
+      const cleanNotes = manualNotes.trim() 
+        ? `${manualPartName.trim()} | ${manualNotes.trim()}` 
+        : manualPartName.trim();
 
-      // 1. Insert ke stock_requests
       const { data: reqData, error: reqErr } = await supabase
         .from('stock_requests')
         .insert([
           {
-            spare_part_id: targetPartId,
+            spare_part_id: null,
             requester_id: authUserId,
             type: 'KELUAR',
-            quantity: isNoPart ? 0 : manualQty,
-            notes: manualNotes.trim() || (isNoPart ? 'Maintenance / Cleaning tanpa penggantian part' : 'Pencatatan data pergantian mesin'),
+            quantity: manualQty,
+            notes: cleanNotes,
             status: 'APPROVED',
             machine_line: manualLine,
             machine_name: manualMachine,
@@ -263,18 +209,17 @@ export default function MachineHistoryPage() {
 
       if (reqErr) throw new Error(`Gagal membuat request: ${reqErr.message}`);
 
-      // 2. Insert ke stock_logs
       const { error: logErr } = await supabase
         .from('stock_logs')
         .insert([
           {
             request_id: reqData.id,
-            spare_part_id: targetPartId,
+            spare_part_id: null,
             actor_id: authUserId,
             type: 'KELUAR',
-            quantity: isNoPart ? 0 : manualQty,
-            stock_before: currentStock,
-            stock_after: isNoPart ? currentStock : Math.max(0, currentStock - manualQty),
+            quantity: manualQty,
+            stock_before: 0,
+            stock_after: 0,
             machine_line: manualLine,
             machine_name: manualMachine,
             created_at: customDate
@@ -283,27 +228,13 @@ export default function MachineHistoryPage() {
 
       if (logErr) throw new Error(`Gagal mencatat log stok: ${logErr.message}`);
 
-      // 3. Potong stok master jika menggunakan part
-      if (!isNoPart && targetPartId) {
-        const newStock = Math.max(0, currentStock - manualQty);
-        const { error: updateStockErr } = await supabase
-          .from('spare_parts')
-          .update({ stock: newStock })
-          .eq('id', targetPartId);
-
-        if (updateStockErr) {
-          console.warn('Gagal memperbarui stok master:', updateStockErr.message);
-        }
-      }
-
-      alert('Catatan pergantian mesin berhasil disimpan!');
+      alert('Catatan pergantian mesin manual berhasil disimpan!');
       setIsManualModalOpen(false);
-      setSelectedPart(null);
-      setPartSearchQuery('');
+      setManualPartName('');
+      setManualQty(1);
       setManualNotes('');
       setManualDate('');
       fetchMachineLogs();
-      fetchSpareParts();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Terjadi kesalahan saat menyimpan data.';
       alert(msg);
@@ -334,11 +265,7 @@ export default function MachineHistoryPage() {
           {isLoggedIn && (
             <button 
               type="button"
-              onClick={() => {
-                setSelectedPart(null);
-                setPartSearchQuery('');
-                setIsManualModalOpen(true);
-              }}
+              onClick={() => setIsManualModalOpen(true)}
               className="flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-xl transition shadow-sm text-sm font-semibold"
             >
               <PlusCircle className="w-4 h-4" /> Input Data Pergantian
@@ -448,11 +375,12 @@ export default function MachineHistoryPage() {
                         </span>
                       </td>
 
+                      {/* PART YANG DIGANTI (Dipisahkan dari catatan tambahan) */}
                       <td className="py-3.5 px-4">
                         {log.spare_parts ? (
                           <>
                             <div className="font-bold text-slate-800 flex items-center gap-2">
-                              <Package className="w-4 h-4 text-blue-500 shrink-0" />
+                              <Wrench className="w-4 h-4 text-blue-500 shrink-0" />
                               {log.spare_parts.name}
                             </div>
                             {log.spare_parts.part_number && (
@@ -462,15 +390,19 @@ export default function MachineHistoryPage() {
                             )}
                           </>
                         ) : (
-                          <div className="whitespace-nowrap font-semibold text-slate-500 italic flex items-center gap-1.5 text-xs">
+                          <div className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
                             <Wrench className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                            Part tidak ada di stok
+                            <span>
+                              {log.stock_requests?.notes 
+                                ? log.stock_requests.notes.split('|')[0].trim() 
+                                : 'Part Manual'}
+                            </span>
                           </div>
                         )}
                       </td>
 
                       <td className="py-3.5 px-4 whitespace-nowrap font-bold text-amber-600 text-xs">
-                        {log.spare_parts ? `${log.quantity} ${log.spare_parts.unit || 'Pcs'}` : '-'}
+                        {log.quantity > 0 ? `${log.quantity} Pcs` : '-'}
                       </td>
 
                       <td className="py-3.5 px-4 whitespace-nowrap">
@@ -482,10 +414,19 @@ export default function MachineHistoryPage() {
                         </div>
                       </td>
 
+                      {/* KETERANGAN TAMBAHAN (Dipisahkan dari nama part) */}
                       <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs">
                         <div className="flex items-start gap-1">
                           <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                          <span className="italic">{log.stock_requests?.notes || 'Tanpa catatan.'}</span>
+                          <span className="italic">
+                            {log.spare_parts ? (
+                              log.stock_requests?.notes || '-'
+                            ) : (
+                              log.stock_requests?.notes?.includes('|') 
+                                ? log.stock_requests.notes.split('|')[1].trim() 
+                                : '-'
+                            )}
+                          </span>
                         </div>
                       </td>
                     </tr>
@@ -497,31 +438,30 @@ export default function MachineHistoryPage() {
         )}
       </main>
 
-      {/* MODAL INPUT DATA PERGANTIAN */}
+      {/* MODAL INPUT DATA PERGANTIAN MANUAL / DILUAR STOK */}
       {isLoggedIn && isManualModalOpen && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && !manualSubmitting) {
               setIsManualModalOpen(false);
-              setIsPartDropdownOpen(false);
             }
           }}
         >
           <div
-            className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl relative my-auto"
+            className="bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl relative my-auto"
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-              <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
-                <PlusCircle className="w-5 h-5 text-amber-500" /> Input Data Pergantian
-              </h3>
+              <div>
+                <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
+                  <PlusCircle className="w-5 h-5 text-amber-500" /> Catat Pergantian Manual
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">Untuk part di luar stok gudang atau histori terdahulu.</p>
+              </div>
               <button
                 type="button"
-                onClick={() => {
-                  setIsManualModalOpen(false);
-                  setIsPartDropdownOpen(false);
-                }}
+                onClick={() => setIsManualModalOpen(false)}
                 disabled={manualSubmitting}
                 className="text-slate-400 hover:text-slate-600 disabled:opacity-50 p-1 rounded-lg hover:bg-slate-100"
               >
@@ -530,131 +470,20 @@ export default function MachineHistoryPage() {
             </div>
 
             <form onSubmit={handleManualSubmit} className="space-y-4">
-              <div className="relative">
+              <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                  Pilih Spare Part (Bisa Ketik Nama / Alias / PN)
+                  Nama Spare Part / Barang *
                 </label>
-
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Ketik nama barang, part number, SKU, atau alias..."
-                    value={partSearchQuery}
-                    onFocus={() => setIsPartDropdownOpen(true)}
-                    onChange={(e) => {
-                      setPartSearchQuery(e.target.value);
-                      setIsPartDropdownOpen(true);
-                    }}
-                    disabled={manualSubmitting}
-                    className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 transition"
-                  />
-                  {selectedPart && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedPart(null);
-                        setPartSearchQuery('');
-                      }}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-
-                {isPartDropdownOpen && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-slate-100 animate-in fade-in duration-150">
-                    <div
-                      onClick={() => {
-                        setSelectedPart(null);
-                        setPartSearchQuery('');
-                        setIsPartDropdownOpen(false);
-                      }}
-                      className={`p-2.5 text-xs font-semibold cursor-pointer transition flex items-center justify-between ${
-                        !selectedPart ? 'bg-amber-50 text-amber-800 font-bold' : 'hover:bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Wrench className="w-4 h-4 text-amber-500" />
-                        <span>-- Part tidak ada di stok --</span>
-                      </div>
-                      {!selectedPart && <Check className="w-4 h-4 text-amber-600" />}
-                    </div>
-
-                    {filteredPartOptions.length === 0 ? (
-                      <div className="p-3 text-xs text-slate-400 text-center">
-                        Tidak ada barang cocok dengan "{partSearchQuery}"
-                      </div>
-                    ) : (
-                      filteredPartOptions.map((part) => (
-                        <div
-                          key={part.id}
-                          onClick={() => {
-                            setSelectedPart(part);
-                            setPartSearchQuery(part.name);
-                            setIsPartDropdownOpen(false);
-                          }}
-                          className={`p-2.5 text-xs cursor-pointer transition flex items-center justify-between ${
-                            selectedPart?.id === part.id ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-50 text-slate-700'
-                          }`}
-                        >
-                          <div>
-                            <span className="font-bold block text-slate-800">{part.name}</span>
-                            <div className="flex flex-wrap gap-x-2 text-[10px] text-slate-400 font-mono mt-0.5">
-                              {part.part_number && <span>PN: {part.part_number}</span>}
-                              {part.sku && <span>SKU: {part.sku}</span>}
-                              {part.aliases && part.aliases.length > 0 && (
-                                <span className="text-amber-600 italic">({part.aliases.join(', ')})</span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="text-right shrink-0 ml-2">
-                            <span className="text-[11px] font-bold text-slate-700 block">Stok: {part.stock} {part.unit}</span>
-                            <span className="text-[10px] text-purple-600 flex items-center justify-end gap-1 mt-0.5">
-                              <Cpu className="w-3 h-3" /> {part.machine_target || 'Umum'}
-                            </span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
+                <input
+                  type="text"
+                  placeholder="Contoh: Sensor PNP / V-Belt Custom / Part Terdahulu"
+                  value={manualPartName}
+                  onChange={(e) => setManualPartName(e.target.value)}
+                  disabled={manualSubmitting}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
+                  required
+                />
               </div>
-
-              {selectedPart ? (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3 animate-in fade-in duration-200">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-12 h-12 rounded-lg bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
-                      {selectedPart.image_url ? (
-                        <img src={selectedPart.image_url} alt={selectedPart.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <Package className="w-6 h-6 text-slate-300" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <h4 className="font-bold text-slate-800 text-xs truncate">{selectedPart.name}</h4>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
-                        <span className="flex items-center gap-1 font-semibold text-purple-700 truncate">
-                          <Cpu className="w-3 h-3 text-purple-600 shrink-0" /> {selectedPart.machine_target || 'Umum / All Machine'}
-                        </span>
-                        <span>•</span>
-                        <span className="shrink-0">Stok: <b>{selectedPart.stock} {selectedPart.unit}</b></span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded-md shrink-0">
-                    Part Terpilih
-                  </span>
-                </div>
-              ) : (
-                <div className="bg-amber-50/70 border border-amber-200/60 rounded-xl p-2.5 flex items-center gap-2 text-amber-800 text-xs font-semibold">
-                  <Wrench className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Part tidak ada di stok</span>
-                </div>
-              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -687,20 +516,20 @@ export default function MachineHistoryPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Jumlah Pcs</label>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Jumlah</label>
                   <input
                     type="number"
                     min={1}
                     value={manualQty}
                     onChange={(e) => setManualQty(parseInt(e.target.value, 10) || 1)}
-                    disabled={manualSubmitting || !selectedPart}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100 disabled:text-slate-400"
-                    required={!!selectedPart}
+                    disabled={manualSubmitting}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
+                    required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Tanggal Pergantian</label>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Tanggal & Waktu</label>
                   <input
                     type="datetime-local"
                     value={manualDate}
@@ -712,13 +541,13 @@ export default function MachineHistoryPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Keterangan / Alasan</label>
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Keterangan Tambahan / Alasan</label>
                 <textarea
                   rows={2}
                   value={manualNotes}
                   onChange={(e) => setManualNotes(e.target.value)}
                   disabled={manualSubmitting}
-                  placeholder="Misal: Maintenance rutin / cleaning mesin..."
+                  placeholder="Misal: Part darurat luar / histori pergantian minggu lalu..."
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
                 />
               </div>
@@ -726,10 +555,7 @@ export default function MachineHistoryPage() {
               <div className="pt-2 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsManualModalOpen(false);
-                    setIsPartDropdownOpen(false);
-                  }}
+                  onClick={() => setIsManualModalOpen(false)}
                   disabled={manualSubmitting}
                   className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition disabled:opacity-50"
                 >

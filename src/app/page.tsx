@@ -30,7 +30,7 @@ import {
   Trash2
 } from 'lucide-react';
 
-// Import Komponen Modal & Drawer (Default Import)
+// Import Komponen Modal & Drawer
 import PartDetailModal from '@/app/components/PartDetailModal';
 import RequestModal from '@/app/components/RequestModal';
 import EditPartModal from '@/app/components/EditPartModal';
@@ -172,7 +172,6 @@ export default function DashboardPage() {
     if (!confirmDelete) return;
 
     try {
-      // Hapus file fisik di storage jika ada
       if (imageUrl) {
         try {
           const urlObj = new URL(imageUrl);
@@ -186,7 +185,6 @@ export default function DashboardPage() {
         }
       }
 
-      // Hapus data baris di tabel database
       const { error } = await supabase
         .from('spare_parts')
         .delete()
@@ -278,6 +276,14 @@ export default function DashboardPage() {
 
               {isAdmin && (
                 <>
+                  {/* Menu Approval Admin */}
+                  <Link
+                    href="/admin/requests"
+                    className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-xl text-xs font-semibold transition shadow-sm"
+                  >
+                    <Inbox className="w-4 h-4" /> Kelola Request
+                  </Link>
+
                   <button
                     type="button"
                     onClick={() => setIsAddPartModalOpen(true)}
@@ -351,6 +357,15 @@ export default function DashboardPage() {
           <div className="md:hidden border-t border-slate-100 bg-white px-4 pt-2 pb-4 space-y-1 shadow-xl">
             {isAdmin && (
               <>
+                <Link
+                  href="/admin/requests"
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 transition mb-1"
+                >
+                  <Inbox className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Kelola & Approve Request</span>
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => {

@@ -67,6 +67,8 @@ export default function AdminRequestsPage() {
           proof_image_url,
           status,
           created_at,
+          machine_line,
+          machine_name,
           spare_parts (name, stock, unit),
           requester:users!requester_id (full_name, email)
         `)
@@ -74,8 +76,9 @@ export default function AdminRequestsPage() {
 
       if (error) throw error;
       setRequests((data as unknown as StockRequest[]) || []);
-    } catch (err: any) {
-      console.error('Error fetching requests:', err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan.';
+      console.error('Error fetching requests:', msg);
     } finally {
       setLoading(false);
     }
@@ -119,7 +122,7 @@ export default function AdminRequestsPage() {
 
       if (reqError) throw reqError;
 
-      // 3. Catat log ke stock_logs sesuai struktur tabel SQL ke-3
+      // 3. Catat log ke stock_logs BESERTA machine_line & machine_name agar masuk ke Catatan Pergantian Mesin
       const { error: logError } = await supabase
         .from('stock_logs')
         .insert({
@@ -130,18 +133,19 @@ export default function AdminRequestsPage() {
           quantity: req.quantity,
           stock_before: currentStock,
           stock_after: newStock,
-          machine_line: req.machine_line,
-          machine_name: req.machine_name,
+          machine_line: req.machine_line || null,
+          machine_name: req.machine_name || null,
         });
 
       if (logError) {
         console.error('Gagal mencatat log:', logError.message);
       }
 
-      alert('Request berhasil disetujui & log riwayat stok telah dicatat!');
+      alert('Request berhasil disetujui & tercatat di Catatan Pergantian Mesin!');
       fetchRequests();
-    } catch (err: any) {
-      alert(`Terjadi kesalahan: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan.';
+      alert(`Terjadi kesalahan: ${msg}`);
     } finally {
       setProcessingId(null);
     }
@@ -162,8 +166,9 @@ export default function AdminRequestsPage() {
 
       alert('Pengajuan berhasil ditolak.');
       fetchRequests();
-    } catch (err: any) {
-      alert(`Gagal menolak request: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan.';
+      alert(`Gagal menolak request: ${msg}`);
     } finally {
       setProcessingId(null);
     }
@@ -186,6 +191,7 @@ export default function AdminRequestsPage() {
         </div>
 
         <button 
+          type="button"
           onClick={fetchRequests}
           className="flex items-center justify-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition shadow-sm text-sm font-medium self-start sm:self-auto"
         >
@@ -257,8 +263,14 @@ export default function AdminRequestsPage() {
                       </div>
                     </div>
 
+                    {(req.machine_line || req.machine_name) && (
+                      <div className="inline-block bg-amber-50 border border-amber-200/60 text-amber-900 text-xs px-2.5 py-1 rounded-lg font-semibold">
+                        ⚙️ Target: {req.machine_line || '-'} ({req.machine_name || '-'})
+                      </div>
+                    )}
+
                     <p className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                      <b>Catatan Pemohon:</b> "{req.notes || 'Tanpa alasan.'}"
+                      <b>Catatan Pemohon:</b> &quot;{req.notes || 'Tanpa alasan.'}&quot;
                     </p>
                   </div>
 
@@ -278,6 +290,7 @@ export default function AdminRequestsPage() {
                     {isPending ? (
                       <div className="flex gap-2">
                         <button
+                          type="button"
                           onClick={() => handleReject(req.id)}
                           disabled={processingId === req.id}
                           className="flex items-center gap-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50"
@@ -285,6 +298,7 @@ export default function AdminRequestsPage() {
                           <X className="w-4 h-4" /> Tolak
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleApprove(req)}
                           disabled={processingId === req.id}
                           className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50"

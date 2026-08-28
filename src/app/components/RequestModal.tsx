@@ -1,18 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/app/lib/supabase';
-import { X, Loader2, Settings2, Camera, Trash2 } from 'lucide-react';
-import { compressImage } from '@/app/lib/imageCompressor';
+import { X, Loader2, Package, Wrench, Search, Check, Cpu } from 'lucide-react';
 
-interface Item {
-  id: string;
-  name: string;
-  unit: string;
-  stock: number;
-}
-
-const REQUEST_MACHINE_UNITS = [
+const MACHINE_OPTIONS = [
   'Dumper',
   'Blowing',
   'Filling',
@@ -35,331 +27,347 @@ const REQUEST_MACHINE_UNITS = [
   'Ringpack A',
   'Ringpack B',
   'Packing Tape',
-  'Palletizer',
-] as const;
+  'Palletizer'
+];
+
+interface SparePart {
+  id: string;
+  name: string;
+  unit: string;
+  part_number: string | null;
+  sku: string | null;
+  aliases: string[] | null;
+  stock: number;
+  machine_target: string | null;
+  image_url: string | null;
+}
 
 interface RequestModalProps {
   isOpen: boolean;
-  onClose: () => void;
+  item: SparePart | null; // Jika null, berarti opsi "Part tidak ada di stok"
   type: 'MASUK' | 'KELUAR';
-  item: Item | null;
+  onClose: () => void;
   onSuccess: () => void;
 }
 
-export default function RequestModal({
-  isOpen,
-  onClose,
-  type,
-  item,
-  onSuccess,
-}: RequestModalProps) {
+export default function RequestModal({ isOpen, item, type, onClose, onSuccess }: RequestModalProps) {
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string>('');
+
+  // Form Fields
   const [quantity, setQuantity] = useState<number>(1);
   const [notes, setNotes] = useState<string>('');
-  const [uploading, setUploading] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string>('');
-  const [proofFile, setProofFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [machineLine, setMachineLine] = useState<string>('Line 4');
-  const [machineName, setMachineName] = useState<string>(REQUEST_MACHINE_UNITS[0]);
+  const [machineName, setMachineName] = useState<string>(MACHINE_OPTIONS[0]);
 
-  // Clean-up Blob URL
-  const clearPreviewUrl = useCallback(() => {
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    setPreviewUrl(null);
-  }, [previewUrl]);
+  // State jika user ingin mengganti part atau memilih part dari modal ini langsung
+  const [sparePartsList, setSparePartsList] = useState<SparePart[]>([]);
+  const [selectedPart, setSelectedPart] = useState<SparePart | null>(null);
+  const [partSearchQuery, setPartSearchQuery] = useState<string>('');
+  const [isPartDropdownOpen, setIsPartDropdownOpen] = useState<boolean>(false);
 
+  // Ambil daftar master part untuk opsi pencarian di dalam modal
   useEffect(() => {
     if (isOpen) {
+      const fetchParts = async () => {
+        const { data } = await supabase
+          .from('spare_parts')
+          .select('id, name, unit, part_number, sku, aliases, stock, machine_target, image_url')
+          .order('name', { ascending: true });
+        if (data) setSparePartsList(data as SparePart[]);
+      };
+      fetchParts();
+
+      // Set initial item jika dipassing dari luar
+      if (item) {
+        setSelectedPart(item);
+        setPartSearchQuery(item.name);
+      } else {
+        setSelectedPart(null);
+        setPartSearchQuery('');
+      }
       setQuantity(1);
       setNotes('');
-      setProofFile(null);
-      clearPreviewUrl();
       setErrorMsg('');
-      setMachineLine('Line 4');
-      setMachineName(REQUEST_MACHINE_UNITS[0]);
     }
-  }, [isOpen, clearPreviewUrl]);
+  }, [isOpen, item]);
 
-  if (!isOpen || !item) return null;
+  // Filter pilihan spare part
+  const filteredPartOptions = useMemo(() => {
+    const q = partSearchQuery.toLowerCase().trim();
+    if (!q) return sparePartsList;
+    return sparePartsList.filter((p) => {
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.part_number?.toLowerCase().includes(q) ||
+        p.sku?.toLowerCase().includes(q) ||
+        p.aliases?.some((a) => a.toLowerCase().includes(q))
+      );
+    });
+  }, [sparePartsList, partSearchQuery]);
 
-  const isStockIn = type === 'MASUK';
+  if (!isOpen) return null;
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
-        return;
-      }
-      clearPreviewUrl();
-      setErrorMsg('');
-      setProofFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
-    }
-  };
-
-  const handleRemoveImage = () => {
-    setProofFile(null);
-    clearPreviewUrl();
-  };
-
-  const uploadProofImage = async (file: File): Promise<string | null> => {
-    const fileName = `proofs/${Date.now()}_${Math.random().toString(36).substring(2, 10)}.jpg`;
-
-    const { data, error } = await supabase.storage
-      .from('sparepart-images')
-      .upload(fileName, file, {
-        cacheControl: '3600',
-        upsert: false,
-        contentType: 'image/jpeg',
-      });
-
-    if (error) {
-      throw new Error(`Gagal mengunggah foto bukti: ${error.message}`);
-    }
-
-    const { data: publicUrlData } = supabase.storage
-      .from('sparepart-images')
-      .getPublicUrl(data.path);
-
-    return publicUrlData.publicUrl;
-  };
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setUploading(true);
+    setSubmitting(true);
     setErrorMsg('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-
-      if (!session?.user?.id) {
+      const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+      if (sessionErr || !session?.user?.id) {
         throw new Error('Sesi Anda telah berakhir. Silakan login kembali.');
       }
 
-      let uploadedImageUrl: string | null = null;
+      const authUserId = session.user.id;
+      const targetPartId = selectedPart ? selectedPart.id : null;
+      const isNoPart = !targetPartId;
 
-      if (proofFile) {
-        const compressed = await compressImage(proofFile, 1600, 0.7);
-        uploadedImageUrl = await uploadProofImage(compressed);
+      // Validasi stok jika keluar menggunakan part
+      if (!isNoPart && selectedPart) {
+        if (quantity <= 0) throw new Error('Jumlah pengambilan minimal 1.');
+        if (quantity > selectedPart.stock) {
+          throw new Error(`Stok tidak mencukupi! Sisa stok saat ini: ${selectedPart.stock} ${selectedPart.unit}`);
+        }
       }
 
-      const { error: insertError } = await supabase
+      // Masukkan ke stock_requests dengan status PENDING (Menunggu Approval Admin)
+      const { error: reqErr } = await supabase
         .from('stock_requests')
         .insert([
           {
-            spare_part_id: item.id,
-            requester_id: session.user.id,
-            type,
-            quantity,
-            notes: notes.trim(),
-            proof_image_url: uploadedImageUrl,
-            status: 'PENDING',
+            spare_part_id: targetPartId,
+            requester_id: authUserId,
+            type: type,
+            quantity: isNoPart ? 0 : quantity,
+            notes: notes.trim() || (isNoPart ? 'Maintenance / Cleaning tanpa penggantian part' : 'Pengambilan part untuk pergantian mesin'),
+            status: 'PENDING', // 🟢 Menunggu approval admin sebelum masuk log/stok dipotong
             machine_line: machineLine,
             machine_name: machineName,
-          },
+          }
         ]);
 
-      if (insertError) {
-        throw new Error(`Gagal mengirim request: ${insertError.message}`);
-      }
+      if (reqErr) throw new Error(`Gagal mengirim request: ${reqErr.message}`);
 
-      alert(`Request ${isStockIn ? 'Tambah' : 'Ambil'} Stok berhasil dikirim ke Admin!`);
-      clearPreviewUrl();
+      alert('Request pengambilan part berhasil dikirim! Menunggu persetujuan (approval) Admin.');
       onSuccess();
       onClose();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Terjadi kesalahan tidak terduga.';
-      setErrorMsg(message);
+      const msg = err instanceof Error ? err.message : 'Terjadi kesalahan sistem.';
+      setErrorMsg(msg);
     } finally {
-      setUploading(false);
+      setSubmitting(false);
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
+      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !uploading) {
-          clearPreviewUrl();
-          onClose();
-        }
+        if (e.target === e.currentTarget && !submitting) onClose();
       }}
     >
       <div
-        className="relative my-auto w-full max-w-md rounded-2xl bg-white p-6 shadow-xl transition-all"
+        className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl relative my-auto max-h-[90vh] overflow-y-auto"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          onClick={() => {
-            clearPreviewUrl();
-            onClose();
-          }}
-          disabled={uploading}
-          className="absolute right-4 top-4 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <h2 className="mb-1 text-xl font-bold text-slate-800">
-          {isStockIn ? '📦 Request Tambah Stok' : '📤 Request Ambil Stok'}
-        </h2>
-
-        <p className="mb-4 text-sm text-slate-500">
-          Barang:{' '}
-          <span className="font-semibold text-slate-700">{item.name}</span>{' '}
-          <span className="text-xs text-slate-400">(Sisa: {item.stock} {item.unit})</span>
-        </p>
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4 sticky top-0 bg-white z-10">
+          <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
+            <Package className="w-5 h-5 text-blue-600" /> Form Pengambilan Part & Mesin
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="text-slate-400 hover:text-slate-600 disabled:opacity-50 p-1 rounded-lg hover:bg-slate-100 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
         {errorMsg && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-600">
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-600">
             {errorMsg}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* JUMLAH */}
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-              Jumlah ({item.unit})
+          {/* PILIH SPARE PART (SEARCHABLE) */}
+          <div className="relative">
+            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+              Pilih Spare Part / Material
             </label>
-            <input
-              type="number"
-              min={1}
-              max={!isStockIn ? item.stock : undefined}
-              value={quantity || ''}
-              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              disabled={uploading}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
-              required
-            />
-          </div>
-
-          {/* MESIN TARGET */}
-          <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-3">
-            <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
-              <Settings2 className="w-4 h-4 text-amber-600" />
-              <span>{isStockIn ? 'Mesin Asal Barang' : 'Target Pergantian Mesin'}</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                  Lokasi Line <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={machineLine}
-                  onChange={(e) => setMachineLine(e.target.value)}
-                  disabled={uploading}
-                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
-                >
-                  <option value="Line 4">Line 4</option>
-                  <option value="Line 5">Line 5</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                  Unit Mesin <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={machineName}
-                  onChange={(e) => setMachineName(e.target.value)}
-                  disabled={uploading}
-                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 truncate disabled:bg-slate-100"
-                >
-                  {REQUEST_MACHINE_UNITS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* ALASAN */}
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
-              Alasan {isStockIn ? 'Penambahan' : 'Pengambilan'}
-            </label>
-            <textarea
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              disabled={uploading}
-              placeholder={
-                isStockIn
-                  ? 'Contoh: Pembongkaran mesin B, barang spare baru...'
-                  : 'Contoh: Perbaikan pergantian part mesin...'
-              }
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
-              required
-            />
-          </div>
-
-          {/* FOTO BUKTI */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-              Foto Bukti / Fisik Barang {isStockIn ? '(Sangat Dianjurkan)' : '(Opsional)'}
-            </label>
-
-            <label className="flex items-center justify-center gap-2 p-3 border border-slate-200 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs cursor-pointer transition shadow-sm border-dashed hover:border-blue-500">
-              <Camera className="w-4 h-4 text-blue-600" />
-              <span>{proofFile ? 'Ganti Foto' : 'Ambil Foto / Pilih Galeri'}</span>
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
-                type="file"
-                accept="image/*"
-                disabled={uploading}
-                onChange={handleFileSelect}
-                className="hidden"
+                type="text"
+                placeholder="Cari nama barang, PN, SKU, atau alias..."
+                value={partSearchQuery}
+                onFocus={() => setIsPartDropdownOpen(true)}
+                onChange={(e) => {
+                  setPartSearchQuery(e.target.value);
+                  setIsPartDropdownOpen(true);
+                }}
+                disabled={submitting}
+                className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 transition"
               />
-            </label>
-
-            {previewUrl && (
-              <div className="relative mt-2 rounded-xl overflow-hidden border border-slate-200 h-36 bg-slate-900 flex items-center justify-center">
-                <img
-                  src={previewUrl}
-                  alt="Preview Bukti"
-                  className="h-full w-full object-cover"
-                />
+              {selectedPart && (
                 <button
                   type="button"
-                  onClick={handleRemoveImage}
-                  disabled={uploading}
-                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-red-600 text-white p-1.5 rounded-lg backdrop-blur-sm transition disabled:opacity-50"
-                  title="Hapus Foto"
+                  onClick={() => {
+                    setSelectedPart(null);
+                    setPartSearchQuery('');
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4" />
                 </button>
+              )}
+            </div>
+
+            {/* DROPDOWN PENCARIAN PART */}
+            {isPartDropdownOpen && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-52 overflow-y-auto divide-y divide-slate-100">
+                <div
+                  onClick={() => {
+                    setSelectedPart(null);
+                    setPartSearchQuery('');
+                    setIsPartDropdownOpen(false);
+                  }}
+                  className={`p-2.5 text-xs font-semibold cursor-pointer transition flex items-center justify-between ${
+                    !selectedPart ? 'bg-amber-50 text-amber-800 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-amber-500" />
+                    <span>-- Part tidak ada di stok (Maintenance / Cleaning) --</span>
+                  </div>
+                  {!selectedPart && <Check className="w-4 h-4 text-amber-600" />}
+                </div>
+
+                {filteredPartOptions.map((part) => (
+                  <div
+                    key={part.id}
+                    onClick={() => {
+                      setSelectedPart(part);
+                      setPartSearchQuery(part.name);
+                      setIsPartDropdownOpen(false);
+                    }}
+                    className={`p-2.5 text-xs cursor-pointer transition flex items-center justify-between ${
+                      selectedPart?.id === part.id ? 'bg-blue-50 text-blue-800 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div>
+                      <span className="font-bold block text-slate-800">{part.name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">PN: {part.part_number || '-'} | Stok: {part.stock} {part.unit}</span>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                      {part.machine_target || 'Umum'}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
-          {/* ACTION BUTTONS */}
-          <div className="flex justify-end gap-2 pt-2">
+          {/* INFO DETAIL PART TERPILIH */}
+          {selectedPart ? (
+            <div className="bg-blue-50/50 border border-blue-200/60 rounded-xl p-3 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-white border border-blue-200 overflow-hidden shrink-0 flex items-center justify-center">
+                {selectedPart.image_url ? (
+                  <img src={selectedPart.image_url} alt={selectedPart.name} className="w-full h-full object-cover" />
+                ) : (
+                  <Package className="w-5 h-5 text-blue-400" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-bold text-slate-800 text-xs truncate">{selectedPart.name}</h4>
+                <p className="text-[10px] text-slate-500">Sisa Stok: <b className="text-blue-700">{selectedPart.stock} {selectedPart.unit}</b></p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-center gap-2 text-amber-800 text-xs font-semibold">
+              <Wrench className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Part tidak ada di stok (Pekerjaan Maintenance / Cleaning)</span>
+            </div>
+          )}
+
+          {/* PILIH LINE & MESIN */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Line Mesin</label>
+              <select
+                value={machineLine}
+                onChange={(e) => setMachineLine(e.target.value)}
+                disabled={submitting}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Line 4">Line 4</option>
+                <option value="Line 5">Line 5</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Unit Mesin</label>
+              <select
+                value={machineName}
+                onChange={(e) => setMachineName(e.target.value)}
+                disabled={submitting}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 truncate"
+              >
+                {MACHINE_OPTIONS.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* JUMLAH & CATATAN */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Jumlah Pengambilan</label>
+              <input
+                type="number"
+                min={1}
+                max={selectedPart ? selectedPart.stock : 1}
+                value={quantity}
+                onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 1)}
+                disabled={submitting || !selectedPart}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400 font-bold"
+                required={!!selectedPart}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Keterangan / Keperluan</label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Contoh: Perbaikan sensor / Ganti bearing aus"
+                disabled={submitting}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          {/* TOMBOL AKSI */}
+          <div className="pt-3 flex gap-2 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => {
-                clearPreviewUrl();
-                onClose();
-              }}
-              disabled={uploading}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
+              onClick={onClose}
+              disabled={submitting}
+              className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition disabled:opacity-50"
             >
               Batal
             </button>
-
             <button
               type="submit"
-              disabled={uploading}
-              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50"
+              disabled={submitting}
+              className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow-md shadow-blue-500/20 disabled:opacity-50"
             >
-              {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {uploading ? 'Mengirim...' : 'Kirim Request'}
+              {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+              Kirim Request (Approval)
             </button>
           </div>
         </form>
