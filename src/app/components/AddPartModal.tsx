@@ -49,6 +49,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [compressing, setCompressing] = useState(false); // State indikator kompresi
   const [errorMsg, setErrorMsg] = useState('');
 
   // Clean-up Blob URL untuk mencegah memory leak
@@ -88,25 +89,37 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
   if (!isOpen) return null;
 
   const handleClose = () => {
-    if (uploading) return;
+    if (uploading || compressing) return;
     resetForm();
     onClose();
   };
 
-  // Handler Pilih / Ambil Foto
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 🟢 PERBAIKAN UTAMA: Kompresi langsung saat file dipilih (Aman untuk HP)
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     if (!file) return;
 
-    if (file.size > 10 * 1024 * 1024) {
-      setErrorMsg('Ukuran file foto terlalu besar (maksimal 10 MB).');
+    if (file.size > 25 * 1024 * 1024) {
+      setErrorMsg('Ukuran file foto terlalu besar (maksimal 25 MB).');
       return;
     }
 
     clearPreviewUrl();
     setErrorMsg('');
-    setImageFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    setCompressing(true);
+
+    try {
+      // Kompresi otomatis langsung di-trigger
+      const compressedFile = await compressImage(file, 1600, 0.7);
+      setImageFile(compressedFile);
+      setPreviewUrl(URL.createObjectURL(compressedFile));
+    } catch (err) {
+      console.warn('Gagal kompresi otomatis, menggunakan file asli:', err);
+      setImageFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    } finally {
+      setCompressing(false);
+    }
   };
 
   const handleRemoveImage = () => {
@@ -120,7 +133,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
 
     const { error: uploadError } = await supabase.storage.from('sparepart-images').upload(filePath, file, {
       cacheControl: '3600',
-      upsert: false,
+      upsert: true,
       contentType: 'image/jpeg',
     });
 
@@ -140,7 +153,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (uploading) return;
+    if (uploading || compressing) return;
     setUploading(true);
     setErrorMsg('');
 
@@ -154,11 +167,10 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
       if (finalStock < 0) throw new Error('Stok awal tidak boleh kurang dari 0.');
       if (finalMinStock < 0) throw new Error('Minimum stok tidak boleh kurang dari 0.');
 
-      // Kompresi Foto (1600px, quality 70%) & Upload
+      // Foto sudah dikompresi di awal saat dipilih, langsung upload ke storage
       let imageUrl: string | null = null;
       if (imageFile) {
-        const compressed = await compressImage(imageFile, 1600, 0.7);
-        imageUrl = await uploadImage(compressed);
+        imageUrl = await uploadImage(imageFile);
       }
 
       // Parsing alias array
@@ -208,7 +220,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(2rem,env(safe-area-inset-top))] backdrop-blur-sm"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !uploading) handleClose();
+        if (e.target === e.currentTarget && !uploading && !compressing) handleClose();
       }}
     >
       <div
@@ -230,7 +242,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
           <button
             type="button"
             onClick={handleClose}
-            disabled={uploading}
+            disabled={uploading || compressing}
             className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             title="Tutup"
           >
@@ -259,23 +271,30 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
 
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 p-4 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-500 hover:bg-slate-100">
                 <Camera className="h-5 w-5 text-blue-600" />
-                <span>{imageFile ? 'Ganti Foto Produk' : 'Ambil Foto / Pilih Galeri'}</span>
+                <span>{compressing ? 'Memproses & Mengompresi Foto...' : imageFile ? 'Ganti Foto Produk' : 'Ambil Foto / Pilih Galeri'}</span>
                 <input
                   type="file"
                   accept="image/*"
-                  disabled={uploading}
+                  disabled={uploading || compressing}
                   onChange={handleFileSelect}
                   className="hidden"
                 />
               </label>
 
-              {previewUrl && (
+              {compressing && (
+                <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <span>Sedang mengecilkan ukuran foto dari HP...</span>
+                </div>
+              )}
+
+              {previewUrl && !compressing && (
                 <div className="relative mt-3 flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-900">
                   <img src={previewUrl} alt="Preview Fisik Part" className="h-full w-full object-cover" />
                   <button
                     type="button"
                     onClick={handleRemoveImage}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="absolute right-2 top-2 rounded-lg bg-slate-900/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-red-600 disabled:opacity-50"
                     title="Hapus Foto"
                   >
@@ -299,7 +318,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Contoh: Bearing 6204 ZZ"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
@@ -314,7 +333,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={partNumber}
                     onChange={(e) => setPartNumber(e.target.value)}
                     placeholder="Contoh: PN-6204ZZ-SKF"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
@@ -328,7 +347,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={sku}
                     onChange={(e) => setSku(e.target.value)}
                     placeholder="Contoh: BRG-001"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
@@ -342,7 +361,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={aliases}
                     onChange={(e) => setAliases(e.target.value)}
                     placeholder="Contoh: laher, bantalan peluru, skf"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                   <p className="mt-1 text-[10px] text-slate-400">Pisahkan beberapa alias dengan koma.</p>
@@ -357,7 +376,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     placeholder="Contoh: Bearing"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
@@ -369,7 +388,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                   <select
                     value={machineTarget}
                     onChange={(e) => setMachineTarget(e.target.value)}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   >
                     {MASTER_MACHINE_LIST.map((machine) => (
@@ -396,7 +415,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={areaLocation}
                     onChange={(e) => setAreaLocation(e.target.value)}
                     placeholder="Contoh: Area A / GDSP"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
@@ -410,7 +429,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={rackLocation}
                     onChange={(e) => setRackLocation(e.target.value)}
                     placeholder="Contoh: Rak B-02"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
                 </div>
@@ -431,7 +450,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     min={0}
                     value={stock}
                     onChange={(e) => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
@@ -446,7 +465,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     min={0}
                     value={minStock}
                     onChange={(e) => setMinStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
@@ -461,7 +480,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
                     placeholder="Pcs / Box / Roll"
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   />
@@ -474,7 +493,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                   <select
                     value={condition}
                     onChange={(e) => setCondition(e.target.value as 'BARU' | 'BEKAS')}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   >
                     <option value="BARU">BARU</option>
@@ -489,7 +508,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
                   <select
                     value={grade}
                     onChange={(e) => setGrade(e.target.value as 'ORIGINAL' | 'PABRIKASI')}
-                    disabled={uploading}
+                    disabled={uploading || compressing}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100"
                   >
                     <option value="ORIGINAL">ORIGINAL</option>
@@ -504,7 +523,7 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
               <button
                 type="button"
                 onClick={handleClose}
-                disabled={uploading}
+                disabled={uploading || compressing}
                 className="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Batal
@@ -512,11 +531,11 @@ export default function AddPartModal({ isOpen, onClose, onSuccess }: AddPartModa
 
               <button
                 type="submit"
-                disabled={uploading}
+                disabled={uploading || compressing}
                 className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-700 active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {uploading ? 'Menyimpan...' : 'Simpan Barang'}
+                {(uploading || compressing) && <Loader2 className="h-4 w-4 animate-spin" />}
+                {uploading ? 'Menyimpan...' : compressing ? 'Memproses Foto...' : 'Simpan Barang'}
               </button>
             </div>
           </form>
