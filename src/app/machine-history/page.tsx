@@ -67,10 +67,17 @@ interface MachineLog {
   } | null;
 }
 
+interface UserSession {
+  id: string;
+  email?: string;
+  name?: string;
+  role?: string;
+}
+
 export default function MachineHistoryPage() {
   const [logs, setLogs] = useState<MachineLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedLineFilter, setSelectedLineFilter] = useState<string>('ALL');
@@ -105,7 +112,22 @@ export default function MachineHistoryPage() {
 
   const checkSession = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
-    setIsLoggedIn(!!session);
+    if (session) {
+      const { data: profile } = await supabase
+        .from('users')
+        .select('full_name, username, role')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+      setCurrentUser({
+        id: session.user.id,
+        email: session.user.email,
+        name: profile?.full_name || profile?.username || session.user.email,
+        role: profile?.role || 'TEKNISI',
+      });
+    } else {
+      setCurrentUser(null);
+    }
   }, []);
 
   const fetchMachineLogs = useCallback(async () => {
@@ -196,6 +218,11 @@ export default function MachineHistoryPage() {
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser?.role !== 'ADMIN') {
+      alert('Akses ditolak! Hanya Admin yang dapat mencatat data pergantian mesin.');
+      return;
+    }
+
     if (!manualPartName.trim()) {
       alert('Nama part atau keterangan barang wajib diisi!');
       return;
@@ -212,26 +239,6 @@ export default function MachineHistoryPage() {
       }
 
       const authUserId = session.user.id;
-
-      const { data: profileCheck } = await supabase
-        .from('users')
-        .select('id')
-        .eq('id', authUserId)
-        .maybeSingle();
-
-      if (!profileCheck) {
-        await supabase
-          .from('users')
-          .insert([
-            {
-              id: authUserId,
-              username: session.user.email?.split('@')[0] || 'teknisi',
-              full_name: session.user.user_metadata?.full_name || session.user.email || 'Teknisi Gudang',
-              role: 'TEKNISI'
-            }
-          ]);
-      }
-
       const customDate = manualDate ? new Date(manualDate).toISOString() : new Date().toISOString();
       
       let uploadedImageUrl = null;
@@ -322,6 +329,8 @@ export default function MachineHistoryPage() {
     }
   };
 
+  const isAdmin = currentUser?.role === 'ADMIN';
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
       {/* HEADER PAGE */}
@@ -340,7 +349,7 @@ export default function MachineHistoryPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {isLoggedIn && (
+          {isAdmin && (
             <button 
               type="button"
               onClick={() => {
@@ -532,8 +541,8 @@ export default function MachineHistoryPage() {
         )}
       </main>
 
-      {/* MODAL INPUT DATA PERGANTIAN MANUAL */}
-      {isLoggedIn && isManualModalOpen && (
+      {/* MODAL INPUT DATA PERGANTIAN MANUAL (HANYA ADMIN) */}
+      {isAdmin && isManualModalOpen && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           onMouseDown={(e) => {
