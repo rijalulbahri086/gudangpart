@@ -123,12 +123,13 @@ export default function AdminRequestsPage() {
       if (reqError) throw reqError;
 
       // 3. Catat log ke stock_logs BESERTA machine_line & machine_name agar masuk ke Catatan Pergantian Mesin
+      // actor_id menggunakan req.requester_id agar nama teknisi pemohon yang tercatat di histori
       const { error: logError } = await supabase
         .from('stock_logs')
         .insert({
           request_id: req.id,
           spare_part_id: req.spare_part_id,
-          actor_id: session?.user?.id || req.requester_id,
+          actor_id: req.requester_id,
           type: req.type,
           quantity: req.quantity,
           stock_before: currentStock,
@@ -141,7 +142,7 @@ export default function AdminRequestsPage() {
         console.error('Gagal mencatat log:', logError.message);
       }
 
-      alert('Request berhasil disetujui & tercatat di Catatan Pergantian Mesin!');
+      alert('Request berhasil disetujui & tercatat di Catatan Pergantian Mesin atas nama teknisi!');
       fetchRequests();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Terjadi kesalahan.';

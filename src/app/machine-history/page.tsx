@@ -67,6 +67,13 @@ interface MachineLog {
   } | null;
 }
 
+interface UserProfile {
+  id: string;
+  full_name: string;
+  username: string;
+  role: string;
+}
+
 interface UserSession {
   id: string;
   email?: string;
@@ -76,6 +83,7 @@ interface UserSession {
 
 export default function MachineHistoryPage() {
   const [logs, setLogs] = useState<MachineLog[]>([]);
+  const [usersList, setUsersList] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
 
@@ -91,6 +99,7 @@ export default function MachineHistoryPage() {
   const [manualQty, setManualQty] = useState<number>(1);
   const [manualDate, setManualDate] = useState<string>('');
   const [manualNotes, setManualNotes] = useState<string>('');
+  const [selectedTechnicianId, setSelectedTechnicianId] = useState<string>('');
 
   // State untuk Bukti Foto & Kompresi
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -130,6 +139,29 @@ export default function MachineHistoryPage() {
     }
   }, []);
 
+  const fetchUsersList = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, full_name, username, role')
+        .order('full_name', { ascending: true });
+
+      if (error) throw error;
+      const list = (data as UserProfile[]) || [];
+      setUsersList(list);
+
+      // Set default terpilih ke user yang sedang login jika ada
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        setSelectedTechnicianId(session.user.id);
+      } else if (list.length > 0) {
+        setSelectedTechnicianId(list[0].id);
+      }
+    } catch (err) {
+      console.error('Error fetching users list:', err);
+    }
+  }, []);
+
   const fetchMachineLogs = useCallback(async () => {
     setLoading(true);
     try {
@@ -160,8 +192,9 @@ export default function MachineHistoryPage() {
 
   useEffect(() => {
     checkSession();
+    fetchUsersList();
     fetchMachineLogs();
-  }, [checkSession, fetchMachineLogs]);
+  }, [checkSession, fetchUsersList, fetchMachineLogs]);
 
   useEffect(() => {
     if (isManualModalOpen || previewPhotoUrl) {
@@ -228,17 +261,15 @@ export default function MachineHistoryPage() {
       return;
     }
 
+    if (!selectedTechnicianId) {
+      alert('Pilih teknisi atau petugas yang bertugas!');
+      return;
+    }
+
     if (manualSubmitting || compressing) return;
     setManualSubmitting(true);
 
     try {
-      const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-      
-      if (sessionErr || !session?.user?.id) {
-        throw new Error('Sesi autentikasi telah berakhir. Silakan login kembali.');
-      }
-
-      const authUserId = session.user.id;
       const customDate = manualDate ? new Date(manualDate).toISOString() : new Date().toISOString();
       
       let uploadedImageUrl = null;
@@ -273,12 +304,13 @@ export default function MachineHistoryPage() {
         cleanNotes += ` | Foto: ${uploadedImageUrl}`;
       }
 
+      // Menggunakan selectedTechnicianId sebagai requester_id agar nama teknisi yang tampil
       const { data: reqData, error: reqErr } = await supabase
         .from('stock_requests')
         .insert([
           {
             spare_part_id: null,
-            requester_id: authUserId,
+            requester_id: selectedTechnicianId,
             type: 'KELUAR',
             quantity: manualQty,
             notes: cleanNotes,
@@ -293,13 +325,14 @@ export default function MachineHistoryPage() {
 
       if (reqErr) throw new Error(`Gagal membuat request: ${reqErr.message}`);
 
+      // Menggunakan selectedTechnicianId sebagai actor_id di log stok
       const { error: logErr } = await supabase
         .from('stock_logs')
         .insert([
           {
             request_id: reqData.id,
             spare_part_id: null,
-            actor_id: authUserId,
+            actor_id: selectedTechnicianId,
             type: 'KELUAR',
             quantity: manualQty,
             stock_before: 0,
@@ -573,6 +606,25 @@ export default function MachineHistoryPage() {
             </div>
 
             <form onSubmit={handleManualSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                  Pilih Teknisi / Petugas Lapangan *
+                </label>
+                <select
+                  value={selectedTechnicianId}
+                  onChange={(e) => setSelectedTechnicianId(e.target.value)}
+                  disabled={manualSubmitting || compressing}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100"
+                  required
+                >
+                  {usersList.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name || u.username} ({u.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
                   Nama Spare Part / Barang *
