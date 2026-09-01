@@ -19,7 +19,6 @@ import {
   X, 
   Loader2, 
   AlertTriangle, 
-  Eye, 
   Cpu, 
   MapPin, 
   LayoutGrid, 
@@ -276,7 +275,6 @@ export default function DashboardPage() {
 
               {isAdmin && (
                 <>
-                  {/* Menu Approval Admin */}
                   <Link
                     href="/admin/requests"
                     className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-xl text-xs font-semibold transition shadow-sm"
@@ -569,7 +567,7 @@ export default function DashboardPage() {
             </p>
           </div>
         ) : viewMode === 'GRID' ? (
-          /* TAMPILAN 1: GRID KARTU */
+          /* TAMPILAN 1: GRID KARTU (SELURUH KARTU BISA DI-KLIK) */
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {filteredItems.map((item) => {
               const isLow = Number(item.stock) <= Number(item.min_stock);
@@ -577,7 +575,8 @@ export default function DashboardPage() {
               return (
                 <div
                   key={item.id}
-                  className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition flex flex-col justify-between overflow-hidden group"
+                  onClick={() => setSelectedDetailItem(item)}
+                  className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition flex flex-col justify-between overflow-hidden group cursor-pointer"
                 >
                   <div>
                     <div className="relative h-44 w-full bg-slate-100 flex items-center justify-center overflow-hidden border-b border-slate-100">
@@ -628,7 +627,8 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  <div className="p-4 pt-0 space-y-3">
+                  {/* Bagian aksi dicegah agar tidak memicu klik kartu utama */}
+                  <div className="p-4 pt-0 space-y-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                       <div>
                         <span className="text-[10px] text-slate-400 uppercase font-semibold block">Sisa Stok</span>
@@ -644,25 +644,15 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    <div className={`grid ${isLoggedIn ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
+                    {isLoggedIn && (
                       <button
                         type="button"
-                        onClick={() => setSelectedDetailItem(item)}
-                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1"
+                        onClick={() => setRequestItem({ item, type: 'KELUAR' })}
+                        className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm flex items-center justify-center gap-1"
                       >
-                        <Eye className="w-3.5 h-3.5" /> Detail
+                        <Plus className="w-3.5 h-3.5" /> Ambil
                       </button>
-
-                      {isLoggedIn && (
-                        <button
-                          type="button"
-                          onClick={() => setRequestItem({ item, type: 'KELUAR' })}
-                          className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm flex items-center justify-center gap-1"
-                        >
-                          <Plus className="w-3.5 h-3.5" /> Ambil
-                        </button>
-                      )}
-                    </div>
+                    )}
 
                     {isAdmin && (
                       <div className="flex gap-1.5">
@@ -707,7 +697,11 @@ export default function DashboardPage() {
                     const isLow = Number(item.stock) <= Number(item.min_stock);
 
                     return (
-                      <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                      <tr 
+                        key={item.id} 
+                        onClick={() => setSelectedDetailItem(item)}
+                        className="hover:bg-slate-50/80 transition cursor-pointer"
+                      >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2.5">
                             <div className="w-8 h-8 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200 flex items-center justify-center">
@@ -749,17 +743,8 @@ export default function DashboardPage() {
                           )}
                         </td>
 
-                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <td className="py-3 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setSelectedDetailItem(item)}
-                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
-                              title="Lihat Detail"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                            </button>
-                            
                             {isLoggedIn && (
                               <button
                                 type="button"
