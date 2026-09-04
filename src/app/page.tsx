@@ -26,7 +26,8 @@ import {
   RefreshCw,
   PackagePlus,
   LogIn,
-  Trash2
+  Trash2,
+  BookOpen
 } from 'lucide-react';
 
 // Import Komponen Modal & Drawer
@@ -109,6 +110,31 @@ export default function DashboardPage() {
   const [selectedDetailItem, setSelectedDetailItem] = useState<SparePart | null>(null);
   const [selectedEditItem, setSelectedEditItem] = useState<SparePart | null>(null);
   const [requestItem, setRequestItem] = useState<{ item: SparePart; type: 'MASUK' | 'KELUAR' } | null>(null);
+
+  // Sinkronisasi modal detail dengan tombol Back HP
+  useEffect(() => {
+    const handlePopState = () => {
+      if (selectedDetailItem) {
+        setSelectedDetailItem(null);
+      }
+    };
+
+    if (selectedDetailItem) {
+      window.history.pushState({ modalOpen: true }, '');
+      window.addEventListener('popstate', handlePopState);
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [selectedDetailItem]);
+
+  const handleCloseDetail = () => {
+    if (selectedDetailItem) {
+      window.history.back();
+    }
+    setSelectedDetailItem(null);
+  };
 
   // 1. Ambil Sesi Pengguna
   const checkSession = useCallback(async () => {
@@ -267,6 +293,13 @@ export default function DashboardPage() {
               </Link>
 
               <Link
+                href="/machine-manuals"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition"
+              >
+                <BookOpen className="w-4 h-4 text-emerald-600" /> Manual Book Mesin
+              </Link>
+
+              <Link
                 href="/stock-logs"
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition"
               >
@@ -412,6 +445,15 @@ export default function DashboardPage() {
                 <span>Riwayat Request Saya</span>
               </Link>
             )}
+
+            <Link
+              href="/machine-manuals"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition"
+            >
+              <BookOpen className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Manual Book Mesin</span>
+            </Link>
 
             <Link
               href="/machine-history"
@@ -781,7 +823,7 @@ export default function DashboardPage() {
       <PartDetailModal
         isOpen={!!selectedDetailItem}
         item={selectedDetailItem}
-        onClose={() => setSelectedDetailItem(null)}
+        onClose={handleCloseDetail}
         canRequest={isLoggedIn}
         onOpenRequest={(item, type) => setRequestItem({ item, type })}
       />
